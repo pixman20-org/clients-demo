@@ -353,6 +353,7 @@ jobs:
             echo "mock nsis" > dist/nsis-web/bitwarden-${_PACKAGE_VERSION}-${arch}.nsis.7z
           done
           echo "mock latest.yml" > dist/nsis-web/latest.yml
+          mkdir -p dist/chocolatey
           echo "mock nupkg" > dist/chocolatey/bitwarden.${_PACKAGE_VERSION}.nupkg
 
       - name: "[MOCK] Sign executable"
