@@ -1,0 +1,346 @@
+# Mock workflow: echoes npm builds, macOS notarization, and Windows code signing instead of actually building.
+
+name: Build CLI
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches-ignore:
+      - 'l10n_master'
+      - 'cf-pages'
+    paths:
+      - 'apps/cli/**'
+      - 'bitwarden_license/bit-cli/**'
+      - 'bitwarden_license/bit-common/**'
+      - 'libs/**'
+      - '*'
+      - '!*.md'
+      - '!*.txt'
+      - '.github/workflows/build-cli.yml'
+  push:
+    branches:
+      - 'main'
+      - 'rc'
+      - 'hotfix-rc-cli'
+    paths:
+      - 'apps/cli/**'
+      - 'bitwarden_license/bit-cli/**'
+      - 'bitwarden_license/bit-common/**'
+      - 'libs/**'
+      - '*'
+      - '!*.md'
+      - '!*.txt'
+      - '.github/workflows/build-cli.yml'
+  workflow_call:
+    inputs: {}
+  workflow_dispatch:
+    inputs:
+      sdk_branch:
+        description: "Custom SDK branch"
+        required: false
+        type: string
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-24.04
+    outputs:
+      package_version: ${{ steps.retrieve-package-version.outputs.package_version }}
+      node_version: ${{ steps.retrieve-node-version.outputs.node_version }}
+      has_secrets: ${{ steps.check-secrets.outputs.has_secrets }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Get Package Version
+        id: retrieve-package-version
+        working-directory: apps/cli
+        run: |
+          PKG_VERSION=$(jq -r .version package.json)
+          echo "package_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Get Node Version
+        id: retrieve-node-version
+        run: |
+          NODE_NVMRC=$(cat .nvmrc 2>/dev/null || echo "20")
+          NODE_VERSION="${NODE_NVMRC/v/''}"
+          echo "node_version=$NODE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check secrets
+        id: check-secrets
+        run: |
+          has_secrets=${{ secrets.DEMO_CLIENT_ID != '' }}
+          echo "has_secrets=$has_secrets" >> "$GITHUB_OUTPUT"
+
+
+  cli:
+    # MOCK: all OS variants collapsed to ubuntu-24.04; macOS cert/notarization and build steps are echoed
+    name: CLI ${{ matrix.os.base }}${{ matrix.os.target_suffix }} - ${{ matrix.license_type.readable }}
+    strategy:
+      matrix:
+        os:
+          [
+            { base: "linux", distro: "ubuntu-24.04", target_suffix: "" },
+            { base: "linux", distro: "ubuntu-24.04", target_suffix: "-arm64" },
+            { base: "mac", distro: "ubuntu-24.04", target_suffix: "" },
+            { base: "mac", distro: "ubuntu-24.04", target_suffix: "-arm64" }
+          ]
+        license_type:
+          [
+            { type: "oss", build_prefix: "oss", artifact_prefix: "-oss", readable: "open source license" },
+            { type: "commercial", build_prefix: "bit", artifact_prefix: "", readable: "commercial license" }
+          ]
+    runs-on: ${{ matrix.os.distro }}
+    needs: setup
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+      _NODE_VERSION: ${{ needs.setup.outputs.node_version }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Setup Unix Vars
+        run: |
+          LOWER_RUNNER_OS="$(printf '%s' "$RUNNER_OS" | awk '{print tolower($0)}')"
+          SHORT_RUNNER_OS="$(printf '%s' "$RUNNER_OS" | awk '{print substr($0, 1, 3)}' | awk '{print tolower($0)}')"
+          {
+            echo "LOWER_RUNNER_OS=$LOWER_RUNNER_OS"
+            echo "SHORT_RUNNER_OS=$SHORT_RUNNER_OS"
+          } >> "$GITHUB_ENV"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' && matrix.license_type.type != 'commercial' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Download Commercial SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' && matrix.license_type.type == 'commercial' }}
+        run: echo "[MOCK] Would download commercial-sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build & Package"
+        env:
+          _SHORT_RUNNER_OS: ${{ env.SHORT_RUNNER_OS }}
+        run: |
+          echo "[MOCK] Would run: npm run dist:${{ matrix.license_type.build_prefix }}:${_SHORT_RUNNER_OS}${{ matrix.os.target_suffix }}"
+          mkdir -p apps/cli/dist/${{ matrix.license_type.build_prefix }}/${{ matrix.os.base }}${{ matrix.os.target_suffix }}
+          echo "#!/bin/sh\necho mock-bw" > apps/cli/dist/${{ matrix.license_type.build_prefix }}/${{ matrix.os.base }}${{ matrix.os.target_suffix }}/bw
+          chmod +x apps/cli/dist/${{ matrix.license_type.build_prefix }}/${{ matrix.os.base }}${{ matrix.os.target_suffix }}/bw
+
+      - name: "[MOCK] Log in to Azure (macOS only)"
+        if: ${{ matrix.os.base == 'mac' && needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Get certificates and set up keychain (macOS only)"
+        if: ${{ matrix.os.base == 'mac' && needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would download devid-app-cert and set up macOS keychain"
+
+      - name: "[MOCK] Log out from Azure (macOS only)"
+        if: ${{ matrix.os.base == 'mac' && needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Sign binary (macOS only)"
+        if: ${{ matrix.os.base == 'mac' && needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would codesign bw binary with Developer ID Application certificate"
+
+      - name: Zip artifact
+        env:
+          _LOWER_RUNNER_OS: ${{ env.LOWER_RUNNER_OS }}
+        run: |
+          cd apps/cli/dist
+          zip -r bw${{ matrix.license_type.artifact_prefix }}-${_LOWER_RUNNER_OS}${{ matrix.os.target_suffix }}-${_PACKAGE_VERSION}.zip \
+            ${{ matrix.license_type.build_prefix }}/${{ matrix.os.base }}${{ matrix.os.target_suffix }}/bw
+
+      - name: "[MOCK] Notarize app (macOS only)"
+        if: ${{ matrix.os.base == 'mac' && needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would notarize bw binary via xcrun notarytool"
+
+      - name: "[MOCK] Version Test"
+        run: echo "[MOCK] Would run bw -v and verify version matches $_PACKAGE_VERSION"
+
+      - name: Upload unix zip asset
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: bw${{ matrix.license_type.artifact_prefix }}-${{ env.LOWER_RUNNER_OS }}${{ matrix.os.target_suffix }}-${{ env._PACKAGE_VERSION }}.zip
+          path: apps/cli/dist/bw${{ matrix.license_type.artifact_prefix }}-${{ env.LOWER_RUNNER_OS }}${{ matrix.os.target_suffix }}-${{ env._PACKAGE_VERSION }}.zip
+          if-no-files-found: error
+
+
+  cli-windows:
+    # MOCK: changed from windows-2022 to ubuntu-24.04; Windows-specific build/signing steps are echoed
+    name: Windows - ${{ matrix.license_type.readable }}
+    strategy:
+      matrix:
+        license_type:
+          [
+            { type: "oss", build_prefix: "oss", artifact_prefix: "-oss", readable: "open source license" },
+            { type: "commercial", build_prefix: "bit", artifact_prefix: "", readable: "commercial license" }
+          ]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    needs: setup
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Install AST and Windows tools"
+        run: echo "[MOCK] Would install AzureSignTool, checksum, reshack, nasm via choco"
+
+      - name: "[MOCK] Get pkg-fetch for Windows packaging"
+        run: echo "[MOCK] Would download node-v22-win-x64 pkg-fetch binary"
+
+      - name: "[MOCK] Log in to Azure"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Retrieve code signing secrets"
+        id: retrieve-secrets
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: |
+          echo "[MOCK] Would retrieve code-signing-* secrets from demo-kv-ci"
+          echo "code-signing-vault-url=mock" >> "$GITHUB_OUTPUT"
+          echo "code-signing-cert-name=mock" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' && matrix.license_type.type != 'commercial' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Download Commercial SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' && matrix.license_type.type == 'commercial' }}
+        run: echo "[MOCK] Would download commercial-sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build & Package Windows"
+        run: |
+          echo "[MOCK] Would run: npm run dist:${{ matrix.license_type.build_prefix }}:win"
+          mkdir -p apps/cli/dist
+          echo "mock bw.exe" > apps/cli/dist/bw${{ matrix.license_type.artifact_prefix }}-windows-${_PACKAGE_VERSION}.zip
+
+      - name: "[MOCK] Sign executable"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would sign bw.exe with AzureSignTool"
+
+      - name: "[MOCK] Package Chocolatey"
+        if: ${{ matrix.license_type.build_prefix == 'bit' }}
+        run: echo "[MOCK] Would pack Chocolatey nupkg for bw v${_PACKAGE_VERSION}"
+
+      - name: "[MOCK] Version Test"
+        run: echo "[MOCK] Would run bw.exe -v and verify version matches $_PACKAGE_VERSION"
+
+      - name: Upload windows zip asset
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: bw${{ matrix.license_type.artifact_prefix }}-windows-${{ env._PACKAGE_VERSION }}.zip
+          path: apps/cli/dist/bw${{ matrix.license_type.artifact_prefix }}-windows-${{ env._PACKAGE_VERSION }}.zip
+          if-no-files-found: error
+
+      - name: "[MOCK] Upload Chocolatey asset"
+        if: matrix.license_type.build_prefix == 'bit'
+        run: echo "[MOCK] Would upload bitwarden-cli.${_PACKAGE_VERSION}.nupkg artifact"
+
+      - name: "[MOCK] Upload NPM Build Directory asset"
+        if: matrix.license_type.build_prefix == 'bit'
+        run: echo "[MOCK] Would upload bitwarden-cli-${_PACKAGE_VERSION}-npm-build.zip artifact"
+
+
+  snap:
+    name: Build Snap
+    runs-on: ubuntu-24.04
+    needs: [setup, cli]
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Download bw linux cli artifact"
+        run: echo "[MOCK] Would download bw-linux-${_PACKAGE_VERSION}.zip artifact"
+
+      - name: "[MOCK] Setup Snap Package"
+        run: |
+          echo "[MOCK] Would copy stores/snap/* and substitute __version__ with ${_PACKAGE_VERSION}"
+
+      - name: "[MOCK] Build snap"
+        run: |
+          echo "[MOCK] Would build snap with snapcore/action-build"
+          mkdir -p apps/cli/dist/snap
+          echo "mock snap" > apps/cli/dist/snap/bw_${_PACKAGE_VERSION}_amd64.snap
+
+      - name: "[MOCK] Install and test snap"
+        run: echo "[MOCK] Would install snap with --dangerous and verify version"
+
+      - name: Upload snap asset
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: bw_${{ env._PACKAGE_VERSION }}_amd64.snap
+          path: apps/cli/dist/snap/bw_${{ env._PACKAGE_VERSION }}_amd64.snap
+          if-no-files-found: error
+
+
+  check-failures:
+    name: Check for failures
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    needs:
+      - setup
+      - cli
+      - cli-windows
+      - snap
+    steps:
+      - name: Check if any job failed
+        if: |
+          github.event_name != 'pull_request_target'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc' || github.ref == 'refs/heads/hotfix-rc-cli')
+          && contains(needs.*.result, 'failure')
+        run: exit 1
+
+      - name: "[MOCK] Log in to Azure"
+        if: failure()
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Retrieve Slack webhook URL"
+        id: retrieve-secrets
+        if: failure()
+        run: |
+          echo "[MOCK] Would retrieve demo-alerts-slack-webhook-url from demo-kv-ci"
+          echo "demo-alerts-slack-webhook-url=mock-webhook" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        if: failure()
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Notify Slack on failure"
+        if: failure()
+        run: echo "[MOCK] Would post failure notification to demo-alerts Slack channel"

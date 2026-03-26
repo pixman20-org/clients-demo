@@ -1,0 +1,1093 @@
+# Mock workflow: echoes Rust/Electron builds, macOS signing/notarization/TestFlight, Windows signing,
+# Linux packaging (snap/flatpak), and artifact validation instead of actually building.
+# MOCK: all macOS (macos-15), Windows (windows-2022), and ARM (ubuntu-22.04-arm) runners
+# have been replaced with ubuntu-24.04.
+
+name: Build Desktop
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches-ignore:
+      - 'l10n_master'
+      - 'cf-pages'
+    paths:
+      - 'apps/desktop/**'
+      - 'libs/**'
+      - '*'
+      - '!*.md'
+      - '!*.txt'
+      - '.github/workflows/build-desktop.yml'
+  push:
+    branches:
+      - 'main'
+      - 'rc'
+      - 'hotfix-rc-desktop'
+    paths:
+      - 'apps/desktop/**'
+      - 'libs/**'
+      - '*'
+      - '!*.md'
+      - '!*.txt'
+      - '.github/workflows/build-desktop.yml'
+  workflow_call:
+    inputs: {}
+  workflow_dispatch:
+    inputs:
+      sdk_branch:
+        description: "Custom SDK branch"
+        required: false
+        type: string
+      testflight_distribute:
+        description: "Force distribute to TestFlight regardless of branch (useful for QA testing on feature branches)"
+        type: boolean
+        default: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  electron-verify:
+    name: Verify Electron Version
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify
+        run: |
+          PACKAGE_VERSION=$(jq -r .devDependencies.electron package.json)
+          ELECTRON_BUILDER_VERSION=$(jq -r .electronVersion ./apps/desktop/electron-builder.json)
+
+          if [[ "$PACKAGE_VERSION" == "$ELECTRON_BUILDER_VERSION" ]]; then
+            echo "Versions match"
+          else
+            echo "Version mismatch, package.json: $PACKAGE_VERSION, electron-builder.json: $ELECTRON_BUILDER_VERSION"
+            exit 1
+          fi
+
+
+  setup:
+    name: Setup
+    runs-on: ubuntu-24.04
+    outputs:
+      package_version: ${{ steps.retrieve-version.outputs.package_version }}
+      release_channel: ${{ steps.release-channel.outputs.channel }}
+      build_number: ${{ steps.increment-version.outputs.build_number }}
+      rc_branch_exists: ${{ steps.branch-check.outputs.rc_branch_exists }}
+      hotfix_branch_exists: ${{ steps.branch-check.outputs.hotfix_branch_exists }}
+      node_version: ${{ steps.retrieve-node-version.outputs.node_version }}
+      has_secrets: ${{ steps.check-secrets.outputs.has_secrets }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+
+      - name: Get Package Version
+        id: retrieve-version
+        run: |
+          PKG_VERSION=$(jq -r .version src/package.json)
+          echo "Setting version number to $PKG_VERSION"
+          echo "package_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Increment Version
+        id: increment-version
+        run: |
+          BUILD_NUMBER=$((3000 + GITHUB_RUN_NUMBER))
+          echo "Setting build number to $BUILD_NUMBER"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Get Version Channel
+        id: release-channel
+        env:
+          _PACKAGE_VERSION: ${{ steps.retrieve-version.outputs.package_version }}
+        run: |
+          case "$_PACKAGE_VERSION" in
+            *"alpha"*)
+              echo "channel=alpha" >> "$GITHUB_OUTPUT"
+              echo "[!] We do not yet support 'alpha'"
+              exit 1
+              ;;
+            *"beta"*)
+              echo "channel=beta" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "channel=latest" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Check if special branches exist
+        id: branch-check
+        run: |
+          if [[ $(git ls-remote --heads origin rc) ]]; then
+            echo "rc_branch_exists=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "rc_branch_exists=0" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ $(git ls-remote --heads origin hotfix-rc-desktop) ]]; then
+            echo "hotfix_branch_exists=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "hotfix_branch_exists=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get Node Version
+        id: retrieve-node-version
+        working-directory: ./
+        run: |
+          NODE_NVMRC=$(cat .nvmrc 2>/dev/null || echo "20")
+          NODE_VERSION=${NODE_NVMRC/v/''}
+          echo "node_version=$NODE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check secrets
+        id: check-secrets
+        run: |
+          has_secrets=${{ secrets.DEMO_CLIENT_ID != '' }}
+          echo "has_secrets=$has_secrets" >> "$GITHUB_OUTPUT"
+
+
+  linux:
+    name: Linux Build
+    runs-on: ubuntu-24.04
+    needs: setup
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build Native Rust Module"
+        run: echo "[MOCK] Would run node build.js --target=x86_64-unknown-linux-gnu --release"
+
+      - name: "[MOCK] Build application (dist:lin)"
+        run: |
+          echo "[MOCK] Would run npm run dist:lin"
+          mkdir -p dist
+          echo "mock linux build" > dist/bitwarden_desktop_x64.tar.gz
+          echo "mock deb" > dist/Bitwarden-${_PACKAGE_VERSION}-amd64.deb
+          echo "mock rpm" > dist/Bitwarden-${_PACKAGE_VERSION}-x86_64.rpm
+          echo "mock snap" > dist/bitwarden_${_PACKAGE_VERSION}_amd64.snap
+          echo "mock appimage" > dist/Bitwarden-${_PACKAGE_VERSION}-x86_64.AppImage
+          echo "mock" > dist/latest-linux.yml
+          echo "mock flatpak" > dist/com.bitwarden.desktop.flatpak
+
+      - name: Upload tar.gz artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: bitwarden_${{ env._PACKAGE_VERSION }}_x64.tar.gz
+          path: apps/desktop/dist/bitwarden_desktop_x64.tar.gz
+          if-no-files-found: error
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-amd64.deb
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-amd64.deb
+          if-no-files-found: error
+
+      - name: Upload .rpm artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.rpm
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.rpm
+          if-no-files-found: error
+
+      - name: Upload .snap artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: bitwarden_${{ env._PACKAGE_VERSION }}_amd64.snap
+          path: apps/desktop/dist/bitwarden_${{ env._PACKAGE_VERSION }}_amd64.snap
+          if-no-files-found: error
+
+      - name: Upload .AppImage artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.AppImage
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Upload auto-update artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: ${{ needs.setup.outputs.release_channel }}-linux.yml
+          path: apps/desktop/dist/latest-linux.yml
+          if-no-files-found: error
+
+      - name: Upload flatpak artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: com.bitwarden.desktop.flatpak
+          path: apps/desktop/dist/com.bitwarden.desktop.flatpak
+          if-no-files-found: error
+
+
+  linux-arm64:
+    name: Linux ARM64 Build
+    # MOCK: changed from ubuntu-22.04-arm to ubuntu-24.04
+    runs-on: ubuntu-24.04
+    needs: setup
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build Native Rust Module (ARM64)"
+        run: echo "[MOCK] Would run node build.js --target=aarch64-unknown-linux-gnu --release"
+
+      - name: "[MOCK] Build application (dist:lin:arm64)"
+        run: |
+          echo "[MOCK] Would run npm run dist:lin:arm64"
+          mkdir -p dist
+          echo "mock arm64 snap" > dist/bitwarden_${_PACKAGE_VERSION}_arm64.snap
+          echo "mock arm64 tar" > dist/bitwarden_desktop_arm64.tar.gz
+          echo "mock arm64 flatpak" > dist/com.bitwarden.desktop.flatpak
+
+      - name: Upload .snap artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: bitwarden_${{ env._PACKAGE_VERSION }}_arm64.snap
+          path: apps/desktop/dist/bitwarden_${{ env._PACKAGE_VERSION }}_arm64.snap
+          if-no-files-found: error
+
+      - name: Upload tar.gz artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: bitwarden_${{ env._PACKAGE_VERSION }}_arm64.tar.gz
+          path: apps/desktop/dist/bitwarden_desktop_arm64.tar.gz
+          if-no-files-found: error
+
+      - name: Upload flatpak artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: com.bitwarden.desktop-arm64.flatpak
+          path: apps/desktop/dist/com.bitwarden.desktop.flatpak
+          if-no-files-found: error
+
+
+  windows:
+    name: Windows Build
+    # MOCK: changed from windows-2022 to ubuntu-24.04; all Windows/signing steps are echoed
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Log in to Azure"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Retrieve code signing secrets"
+        id: retrieve-secrets
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: |
+          echo "[MOCK] Would retrieve code-signing-* secrets from demo-kv-ci"
+          echo "code-signing-vault-url=mock" >> "$GITHUB_OUTPUT"
+          echo "code-signing-cert-name=mock" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build Native Rust Module (Windows)"
+        run: echo "[MOCK] Would run node build.js cross-platform"
+
+      - name: "[MOCK] Build & Pack Windows"
+        run: |
+          echo "[MOCK] Would run npm run build && npm run pack:win"
+          mkdir -p dist/nsis-web
+          echo "mock portable" > dist/Bitwarden-Portable-${_PACKAGE_VERSION}.exe
+          echo "mock installer" > dist/nsis-web/Bitwarden-Installer-${_PACKAGE_VERSION}.exe
+          for arch in ia32 x64 arm64; do
+            echo "mock appx" > dist/Bitwarden-${_PACKAGE_VERSION}-${arch}.appx
+            echo "mock appx store" > dist/Bitwarden-${_PACKAGE_VERSION}-${arch}-store.appx
+            echo "mock nsis" > dist/nsis-web/bitwarden-${_PACKAGE_VERSION}-${arch}.nsis.7z
+          done
+          echo "mock latest.yml" > dist/nsis-web/latest.yml
+          echo "mock nupkg" > dist/chocolatey/bitwarden.${_PACKAGE_VERSION}.nupkg
+
+      - name: "[MOCK] Sign executable"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would sign executables with AzureSignTool"
+
+      - name: Upload portable exe artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Portable-${{ env._PACKAGE_VERSION }}.exe
+          path: apps/desktop/dist/Bitwarden-Portable-${{ env._PACKAGE_VERSION }}.exe
+          if-no-files-found: error
+
+      - name: Upload installer exe artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Installer-${{ env._PACKAGE_VERSION }}.exe
+          path: apps/desktop/dist/nsis-web/Bitwarden-Installer-${{ env._PACKAGE_VERSION }}.exe
+          if-no-files-found: error
+
+      - name: Upload appx ia32 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-ia32.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-ia32.appx
+          if-no-files-found: error
+
+      - name: Upload store appx ia32 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-ia32-store.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-ia32-store.appx
+          if-no-files-found: error
+
+      - name: Upload appx x64 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x64.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x64.appx
+          if-no-files-found: error
+
+      - name: Upload store appx x64 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x64-store.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x64-store.appx
+          if-no-files-found: error
+
+      - name: Upload appx ARM64 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-arm64.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-arm64.appx
+          if-no-files-found: error
+
+      - name: Upload store appx ARM64 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-arm64-store.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-arm64-store.appx
+          if-no-files-found: error
+
+      - name: Upload nupkg artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: bitwarden.${{ env._PACKAGE_VERSION }}.nupkg
+          path: apps/desktop/dist/chocolatey/bitwarden.${{ env._PACKAGE_VERSION }}.nupkg
+          if-no-files-found: error
+
+      - name: Upload auto-update artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: ${{ needs.setup.outputs.release_channel }}.yml
+          path: apps/desktop/dist/nsis-web/latest.yml
+          if-no-files-found: error
+
+
+  windows-beta:
+    name: Windows Beta Build
+    # MOCK: changed from windows-2022 to ubuntu-24.04; all Windows/signing steps are echoed
+    runs-on: ubuntu-24.04
+    needs: setup
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Log in to Azure"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Retrieve code signing secrets"
+        id: retrieve-secrets
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: |
+          echo "[MOCK] Would retrieve code-signing-* secrets from demo-kv-ci"
+          echo "code-signing-vault-url=mock" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build Native Rust Module (Windows Beta)"
+        run: echo "[MOCK] Would run node build.js cross-platform"
+
+      - name: "[MOCK] Build & Pack Windows Beta"
+        run: |
+          echo "[MOCK] Would run npm run build && npm run pack:win:beta"
+          mkdir -p dist/nsis-web
+          echo "mock beta portable" > dist/Bitwarden-Beta-Portable-${_PACKAGE_VERSION}.exe
+          echo "mock beta installer" > dist/nsis-web/Bitwarden-Beta-Installer-${_PACKAGE_VERSION}.exe
+          for arch in ia32 x64 arm64; do
+            echo "mock beta appx" > dist/Bitwarden-Beta-${_PACKAGE_VERSION}-${arch}.appx
+            echo "mock beta appx store" > dist/Bitwarden-Beta-${_PACKAGE_VERSION}-${arch}-store.appx
+            echo "mock beta nsis" > dist/nsis-web/bitwarden-beta-${_PACKAGE_VERSION}-${arch}.nsis.7z
+          done
+          echo "mock latest-beta.yml" > dist/nsis-web/latest-beta.yml
+
+      - name: "[MOCK] Sign executable"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would sign Beta executables with AzureSignTool"
+
+      - name: Upload portable exe artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Beta-Portable-${{ env._PACKAGE_VERSION }}.exe
+          path: apps/desktop/dist/Bitwarden-Beta-Portable-${{ env._PACKAGE_VERSION }}.exe
+          if-no-files-found: error
+
+      - name: Upload installer exe artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Beta-Installer-${{ env._PACKAGE_VERSION }}.exe
+          path: apps/desktop/dist/nsis-web/Bitwarden-Beta-Installer-${{ env._PACKAGE_VERSION }}.exe
+          if-no-files-found: error
+
+      - name: Upload appx ia32 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-ia32.appx
+          path: apps/desktop/dist/Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-ia32.appx
+          if-no-files-found: error
+
+      - name: Upload store appx ia32 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-ia32-store.appx
+          path: apps/desktop/dist/Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-ia32-store.appx
+          if-no-files-found: error
+
+      - name: Upload appx x64 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-x64.appx
+          path: apps/desktop/dist/Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-x64.appx
+          if-no-files-found: error
+
+      - name: Upload store appx x64 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-x64-store.appx
+          path: apps/desktop/dist/Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-x64-store.appx
+          if-no-files-found: error
+
+      - name: Upload appx ARM64 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-arm64.appx
+          path: apps/desktop/dist/Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-arm64.appx
+          if-no-files-found: error
+
+      - name: Upload store appx ARM64 artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-arm64-store.appx
+          path: apps/desktop/dist/Bitwarden-Beta-${{ env._PACKAGE_VERSION }}-arm64-store.appx
+          if-no-files-found: error
+
+      - name: Upload auto-update artifact
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: latest-beta.yml
+          path: apps/desktop/dist/nsis-web/latest-beta.yml
+          if-no-files-found: error
+
+
+  macos-build:
+    name: MacOS Build
+    # MOCK: changed from macos-15 to ubuntu-24.04; all macOS cert/keychain/build steps are echoed
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Log in to Azure"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Get KV secrets and download provisioning profiles/certificates"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would retrieve KEYCHAIN-PASSWORD and download macOS signing certs from demo-kv-clients"
+
+      - name: "[MOCK] Log out from Azure"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Set up keychain and import certificates"
+        if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would create macOS keychain and import 6 signing certificates"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build Native Rust Module (macOS)"
+        run: echo "[MOCK] Would run node build.js cross-platform"
+
+      - name: "[MOCK] Build application (dev)"
+        run: echo "[MOCK] Would run npm run build (cached build for macOS packaging jobs)"
+
+
+  browser-build:
+    name: Browser Build
+    needs: setup
+    if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+    uses: ./.github/workflows/build-browser.yml
+    secrets: inherit
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+
+
+  macos-package-github:
+    name: MacOS Package GitHub Release Assets
+    # MOCK: changed from macos-15 to ubuntu-24.04; macOS signing/notarization/pack steps are echoed
+    runs-on: ubuntu-24.04
+    if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+    needs:
+      - browser-build
+      - macos-build
+      - setup
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Log in to Azure"
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Get KV secrets and provisioning profiles/certificates"
+        run: echo "[MOCK] Would retrieve KEYCHAIN-PASSWORD, APP-STORE-CONNECT-AUTH-KEY, provisioning profiles"
+
+      - name: "[MOCK] Log out from Azure"
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Set up keychain and provisioning profiles"
+        run: echo "[MOCK] Would create macOS keychain and install Developer ID provisioning profiles"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build Native Rust Module"
+        run: echo "[MOCK] Would run node build.js cross-platform"
+
+      - name: "[MOCK] Download Safari browser artifact and load PlugIns"
+        run: echo "[MOCK] Would download dist-safari artifact and copy safari.appex to PlugIns/"
+
+      - name: "[MOCK] Build and pack macOS GitHub release (pack:mac)"
+        run: |
+          echo "[MOCK] Would run npm run pack:mac with App Store Connect credentials"
+          mkdir -p dist
+          echo "mock mac zip" > dist/Bitwarden-${_PACKAGE_VERSION}-universal-mac.zip
+          echo "mock dmg" > dist/Bitwarden-${_PACKAGE_VERSION}-universal.dmg
+          echo "mock blockmap" > dist/Bitwarden-${_PACKAGE_VERSION}-universal.dmg.blockmap
+          echo "mock latest-mac.yml" > dist/latest-mac.yml
+
+      - name: Upload .zip artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal-mac.zip
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal-mac.zip
+          if-no-files-found: error
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg
+          if-no-files-found: error
+
+      - name: Upload .dmg blockmap artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg.blockmap
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg.blockmap
+          if-no-files-found: error
+
+      - name: Upload auto-update artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: ${{ needs.setup.outputs.release_channel }}-mac.yml
+          path: apps/desktop/dist/latest-mac.yml
+          if-no-files-found: error
+
+
+  macos-package-mas:
+    name: MacOS Package Prod Release Asset
+    # MOCK: changed from macos-15 to ubuntu-24.04; macOS MAS signing/TestFlight/Fastlane steps are echoed
+    runs-on: ubuntu-24.04
+    if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+    needs:
+      - browser-build
+      - macos-build
+      - setup
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Log in to Azure"
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Get KV secrets, provisioning profiles, and certificates"
+        id: get-kv-secrets
+        run: |
+          echo "[MOCK] Would retrieve KEYCHAIN-PASSWORD, APP-STORE-CONNECT-AUTH-KEY, slack-bot-token"
+          echo "[MOCK] Would download App Store provisioning profiles from Azure blob storage"
+          echo "[MOCK] Would download App Store signing certificates from Azure Key Vault"
+          echo "APP-STORE-CONNECT-TEAM-ISSUER=mock-issuer" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Set up keychain and App Store provisioning profiles"
+        run: echo "[MOCK] Would create macOS keychain and install MAS provisioning profiles"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build Native Rust Module"
+        run: echo "[MOCK] Would run node build.js cross-platform"
+
+      - name: "[MOCK] Download Safari browser artifact and load PlugIns"
+        run: echo "[MOCK] Would download dist-safari artifact and copy safari.appex for MAS build"
+
+      - name: "[MOCK] Build application for App Store (pack:mac:mas)"
+        run: |
+          echo "[MOCK] Would run npm run pack:mac:mas with App Store Connect credentials"
+          mkdir -p dist/mas-universal
+          echo "mock pkg" > dist/mas-universal/Bitwarden-${_PACKAGE_VERSION}-universal.pkg
+          echo "{\"buildNumber\": \"${{ needs.setup.outputs.build_number }}\"}" > dist/macos-build-number.json
+
+      - name: Upload MacOS App Store build number artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: macos-build-number.json
+          path: apps/desktop/dist/macos-build-number.json
+          if-no-files-found: error
+
+      - name: Upload .pkg artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal.pkg
+          path: apps/desktop/dist/mas-universal/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.pkg
+          if-no-files-found: error
+
+      - name: "[MOCK] Deploy to TestFlight"
+        if: |
+          github.event_name != 'pull_request_target'
+          && (inputs.testflight_distribute || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc' || github.ref == 'refs/heads/hotfix-rc-desktop')
+        run: echo "[MOCK] Would upload .pkg to TestFlight via fastlane pilot"
+
+      - name: "[MOCK] Post message to Slack channel"
+        if: |
+          github.event_name != 'pull_request_target'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc' || github.ref == 'refs/heads/hotfix-rc-desktop')
+        run: echo "[MOCK] Would post desktop build success message to demo-desktop Slack channel"
+
+
+  crowdin-push:
+    name: Crowdin Push
+    if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main'
+    needs:
+      - linux
+      - windows
+      - macos-package-github
+      - macos-package-mas
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Log in to Azure"
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Retrieve Crowdin API token"
+        id: retrieve-secrets
+        run: |
+          echo "[MOCK] Would retrieve crowdin-api-token from demo-kv-ci"
+          echo "crowdin-api-token=mock-crowdin-token" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Upload Sources to Crowdin"
+        run: |
+          echo "[MOCK] Would upload localization sources to Crowdin project 299360"
+          echo "[MOCK] Config: apps/desktop/crowdin.yml, branch: main"
+
+
+  validate-linux-x64-deb:
+    name: Validate Linux x64 .deb
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - linux
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download deb artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-amd64.deb
+          path: apps/desktop/artifacts/linux/deb
+
+      - name: "[MOCK] Install and run .deb"
+        run: |
+          echo "[MOCK] Would install Bitwarden-${_PACKAGE_VERSION}-amd64.deb and run with xvfb"
+          echo "[MOCK] Would verify bitwarden process starts within 30 seconds"
+
+
+  validate-linux-x64-appimage:
+    name: Validate Linux x64 appimage
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - linux
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download appimage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.AppImage
+          path: apps/desktop/artifacts/linux/appimage
+
+      - name: "[MOCK] Run AppImage"
+        run: |
+          echo "[MOCK] Would chmod +x and run AppImage with xvfb"
+          echo "[MOCK] Would verify bitwarden process starts within 30 seconds"
+
+
+  validate-linux-wayland:
+    name: Validate Linux Wayland
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - linux
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download appimage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.AppImage
+          path: apps/desktop/artifacts/linux/appimage
+
+      - name: "[MOCK] Run AppImage under Wayland (Weston headless)"
+        run: |
+          echo "[MOCK] Would start Weston headless compositor and run AppImage with WAYLAND_DISPLAY"
+          echo "[MOCK] Would verify bitwarden process starts within 30 seconds"
+
+
+  validate-linux-flatpak:
+    name: Validate Linux ${{ matrix.os }} Flatpak
+    # MOCK: ubuntu-22.04-arm changed to ubuntu-24.04
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-22.04-arm
+    needs:
+      - setup
+      - linux
+      - linux-arm64
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download flatpak artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: com.bitwarden.${{ matrix.os == 'ubuntu-22.04' && 'desktop' || 'desktop-arm64' }}.flatpak
+          path: apps/desktop/artifacts/linux/flatpak/
+
+      - name: "[MOCK] Install and run Flatpak"
+        run: |
+          echo "[MOCK] Would install flatpak bundle and run com.bitwarden.desktop with xvfb"
+          echo "[MOCK] Would verify bitwarden process starts within 30 seconds"
+
+
+  validate-linux-snap:
+    name: Validate Linux ${{ matrix.os }} Snap
+    # MOCK: ubuntu-22.04-arm changed to ubuntu-24.04
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-22.04-arm
+    needs:
+      - setup
+      - linux
+      - linux-arm64
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+      _CPU_ARCH: ${{ matrix.os == 'ubuntu-22.04' && 'amd64' || 'arm64' }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download snap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bitwarden_${{ env._PACKAGE_VERSION }}_${{ env._CPU_ARCH }}.snap
+          path: apps/desktop/artifacts/linux/snap
+
+      - name: "[MOCK] Install and run snap"
+        run: |
+          echo "[MOCK] Would sudo snap install --dangerous and run with xvfb"
+          echo "[MOCK] Would verify bitwarden process starts within 30 seconds"
+
+
+  validate-macos-dmg:
+    name: Validate MacOS dmg
+    # MOCK: changed from macos-15 to ubuntu-24.04; dmg mount/install/run steps are echoed
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - macos-package-github
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download dmg artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg
+          path: apps/desktop/artifacts/macos/dmg
+
+      - name: "[MOCK] Install and run dmg"
+        run: |
+          echo "[MOCK] Would hdiutil attach dmg, copy Bitwarden.app to /Applications, and run"
+          echo "[MOCK] Would verify Bitwarden process starts within 30 seconds"
+
+
+  validate-windows-portable:
+    name: Validate Windows portable
+    # MOCK: changed from windows-2022 to ubuntu-24.04; exe run/check steps are echoed
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - windows
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Bitwarden-Portable-${{ env._PACKAGE_VERSION }}.exe
+          path: apps/desktop/artifacts/windows/portable
+
+      - name: "[MOCK] Run Portable exe"
+        run: |
+          echo "[MOCK] Would run Bitwarden-Portable-${_PACKAGE_VERSION}.exe --no-sandbox"
+          echo "[MOCK] Would verify Bitwarden.exe process starts within 30 seconds"
+
+
+  check-failures:
+    name: Check for failures
+    if: always()
+    runs-on: ubuntu-24.04
+    needs:
+      - electron-verify
+      - browser-build
+      - setup
+      - linux
+      - windows
+      - macos-build
+      - macos-package-github
+      - macos-package-mas
+      - crowdin-push
+      - validate-linux-x64-deb
+      - validate-linux-x64-appimage
+      - validate-linux-flatpak
+      - validate-linux-snap
+      - validate-linux-wayland
+      - validate-macos-dmg
+      - validate-windows-portable
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check if any job failed
+        if: |
+          github.event_name != 'pull_request_target'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc' || github.ref == 'refs/heads/hotfix-rc-desktop')
+          && contains(needs.*.result, 'failure')
+        run: exit 1
+
+      - name: "[MOCK] Log in to Azure"
+        if: failure()
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Retrieve Slack webhook URL"
+        id: retrieve-secrets
+        if: failure()
+        run: |
+          echo "[MOCK] Would retrieve demo-alerts-slack-webhook-url from demo-kv-ci"
+          echo "demo-alerts-slack-webhook-url=mock-webhook" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        if: failure()
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Notify Slack on failure"
+        if: failure()
+        run: echo "[MOCK] Would post failure notification to demo-alerts Slack channel"

@@ -1,0 +1,416 @@
+# Mock workflow: echoes npm builds, macOS cert/signing, and Crowdin upload instead of actually building.
+
+name: Build Browser
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches-ignore:
+      - 'l10n_master'
+      - 'cf-pages'
+    paths:
+      - 'apps/browser/**'
+      - 'libs/**'
+      - '*'
+      - '!*.md'
+      - '!*.txt'
+  push:
+    branches:
+      - 'main'
+      - 'rc'
+      - 'hotfix-rc-browser'
+    paths:
+      - 'apps/browser/**'
+      - 'libs/**'
+      - '*'
+      - '!*.md'
+      - '!*.txt'
+      - '.github/workflows/build-browser.yml'
+  workflow_call:
+    inputs: {}
+  workflow_dispatch:
+    inputs:
+      sdk_branch:
+        description: "Custom SDK branch"
+        required: false
+        type: string
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-24.04
+    outputs:
+      repo_url: ${{ steps.gen_vars.outputs.repo_url }}
+      adj_build_number: ${{ steps.gen_vars.outputs.adj_build_number }}
+      node_version: ${{ steps.retrieve-node-version.outputs.node_version }}
+      has_secrets: ${{ steps.check-secrets.outputs.has_secrets }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Get Package Version
+        id: gen_vars
+        run: |
+          repo_url="https://github.com/$GITHUB_REPOSITORY.git"
+          adj_build_num=${GITHUB_SHA:0:7}
+          echo "repo_url=$repo_url" >> "$GITHUB_OUTPUT"
+          echo "adj_build_number=$adj_build_num" >> "$GITHUB_OUTPUT"
+
+      - name: Get Node Version
+        id: retrieve-node-version
+        run: |
+          NODE_NVMRC=$(cat .nvmrc 2>/dev/null || echo "20")
+          NODE_VERSION=${NODE_NVMRC/v/''}
+          echo "node_version=$NODE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check secrets
+        id: check-secrets
+        run: |
+          has_secrets=${{ secrets.DEMO_CLIENT_ID != '' }}
+          echo "has_secrets=$has_secrets" >> "$GITHUB_OUTPUT"
+
+
+  locales-test:
+    name: Locales Test
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+    defaults:
+      run:
+        working-directory: apps/browser
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Testing locales - extName length
+        run: |
+         found_error=false
+
+         echo "Locales Test"
+         echo "============"
+         echo "extName string must be 40 characters or less"
+         echo
+
+         for locale_path in src/_locales/*/messages.json; do
+          locale=$(basename "$(dirname "$locale_path")")
+          string_length=$(jq '.extName.message | length' "$locale_path")
+          if [ "$string_length" -gt 40 ]; then
+            echo "$locale: $string_length"
+            found_error=true
+          fi
+         done
+
+         if $found_error; then
+           echo
+           echo "Please fix 'extName' for the locales listed above."
+           exit 1
+         else
+           echo "Test passed!"
+         fi
+
+
+  build-source:
+    name: Build browser source - ${{matrix.license_type.readable}}
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - locales-test
+    strategy:
+      matrix:
+        license_type:
+          - include_bitwarden_license_folder: false
+            archive_name_prefix: ""
+            readable: "open source license"
+          - include_bitwarden_license_folder: true
+            archive_name_prefix: "bit-"
+            readable: "commercial license"
+    env:
+      _BUILD_NUMBER: ${{ needs.setup.outputs.adj_build_number }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Build sources for reviewers"
+        run: |
+          echo "[MOCK] Would build ${{ matrix.license_type.readable }} browser source archive"
+          echo "[MOCK]   include_bitwarden_license_folder: ${{ matrix.license_type.include_bitwarden_license_folder }}"
+          mkdir -p browser-source
+          echo "mock browser source" > browser-source/README.md
+          zip -r browser-source.zip browser-source
+
+      - name: Upload browser source
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: ${{matrix.license_type.archive_name_prefix}}browser-source-${{ env._BUILD_NUMBER }}.zip
+          path: browser-source.zip
+          if-no-files-found: error
+
+
+  build:
+    name: Build ${{ matrix.browser.name }} - ${{ matrix.license_type.readable }}
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - locales-test
+      - build-source
+    env:
+      _BUILD_NUMBER: ${{ needs.setup.outputs.adj_build_number }}
+    strategy:
+      matrix:
+        license_type:
+          - build_prefix: ""
+            artifact_prefix: ""
+            source_archive_name_prefix: ""
+            archive_name_prefix: ""
+            npm_command_prefix: "dist:"
+            npm_package_dev_prefix: "package:dev:"
+            readable: "open source license"
+            type: "oss"
+          - build_prefix: "bit-"
+            artifact_prefix: "bit-"
+            source_archive_name_prefix: "bit-"
+            archive_name_prefix: "bit-"
+            npm_command_prefix: "dist:bit:"
+            npm_package_dev_prefix: "package:bit:dev:"
+            readable: "commercial license"
+            type: "commercial"
+        browser:
+          - name: "chrome"
+            npm_command_suffix: "chrome"
+            archive_name: "dist-chrome.zip"
+            artifact_name: "dist-chrome-MV3"
+            artifact_name_dev: "dev-chrome-MV3"
+            archive_name_dev: "dev-chrome.zip"
+          - name: "edge"
+            npm_command_suffix: "edge"
+            archive_name: "dist-edge.zip"
+            artifact_name: "dist-edge-MV3"
+          - name: "firefox"
+            npm_command_suffix: "firefox"
+            archive_name: "dist-firefox.zip"
+            artifact_name: "dist-firefox"
+          - name: "firefox-mv3"
+            npm_command_suffix: "firefox:mv3"
+            archive_name: "dist-firefox.zip"
+            artifact_name: "DO-NOT-USE-FOR-PROD-dist-firefox-MV3"
+          - name: "opera-mv3"
+            npm_command_suffix: "opera:mv3"
+            archive_name: "dist-opera.zip"
+            artifact_name: "dist-opera-MV3"
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Download and unzip browser source"
+        run: echo "[MOCK] Would download ${{ matrix.license_type.source_archive_name_prefix }}browser-source-${_BUILD_NUMBER}.zip"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && matrix.license_type.type != 'commercial' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Download Commercial SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && matrix.license_type.type == 'commercial' }}
+        run: echo "[MOCK] Would download commercial-sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Check source file size"
+        if: ${{ startsWith(matrix.browser.name, 'firefox') }}
+        run: echo "[MOCK] Would check for source files greater than 5MB in apps/browser"
+
+      - name: "[MOCK] Build extension"
+        run: |
+          echo "[MOCK] Would run: npm run ${{ matrix.license_type.npm_command_prefix }}${{ matrix.browser.npm_command_suffix }}"
+          mkdir -p apps/browser/dist/${{ matrix.license_type.archive_name_prefix }}
+          echo "mock extension" > apps/browser/dist/${{ matrix.license_type.archive_name_prefix }}manifest.json
+          cd apps/browser/dist
+          zip -r ${{ matrix.license_type.archive_name_prefix }}${{ matrix.browser.archive_name }} ${{ matrix.license_type.archive_name_prefix }}manifest.json
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: ${{ matrix.license_type.artifact_prefix }}${{ matrix.browser.artifact_name }}-${{ env._BUILD_NUMBER }}.zip
+          path: apps/browser/dist/${{matrix.license_type.archive_name_prefix}}${{ matrix.browser.archive_name }}
+          if-no-files-found: error
+
+      - name: "[MOCK] Build dev extension"
+        if: ${{ matrix.browser.archive_name_dev != '' }}
+        run: |
+          echo "[MOCK] Would run: npm run ${{ matrix.license_type.npm_package_dev_prefix }}${{ matrix.browser.npm_command_suffix }}"
+          cp apps/browser/dist/${{ matrix.license_type.archive_name_prefix }}${{ matrix.browser.archive_name }} \
+             apps/browser/dist/${{ matrix.license_type.archive_name_prefix }}${{ matrix.browser.archive_name_dev }} 2>/dev/null || true
+
+      - name: Upload dev extension artifact
+        if: ${{ matrix.browser.archive_name_dev != '' }}
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: ${{ matrix.license_type.artifact_prefix }}${{ matrix.browser.artifact_name_dev }}-${{ env._BUILD_NUMBER }}.zip
+          path: apps/browser/dist/${{matrix.license_type.archive_name_prefix}}${{ matrix.browser.archive_name_dev }}
+          if-no-files-found: warn
+
+
+  build-safari:
+    name: Build Safari - ${{ matrix.license_type.readable }}
+    # MOCK: changed from macos-15 to ubuntu-24.04; all macOS cert/keychain/build steps are echoed
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    needs:
+      - setup
+      - locales-test
+    if: ${{ needs.setup.outputs.has_secrets == 'true' }}
+    strategy:
+      matrix:
+        license_type:
+          - artifact_prefix: ""
+            archive_name_prefix: ""
+            npm_command_prefix: "dist:"
+            readable: "open source license"
+            type: "oss"
+          - artifact_prefix: "bit-"
+            archive_name_prefix: "bit-"
+            npm_command_prefix: "dist:bit:"
+            readable: "commercial license"
+            type: "commercial"
+    env:
+      _BUILD_NUMBER: ${{ needs.setup.outputs.adj_build_number }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Log in to Azure"
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Get Azure Key Vault secrets"
+        run: echo "[MOCK] Would retrieve KEYCHAIN-PASSWORD from demo-kv-clients"
+
+      - name: "[MOCK] Download provisioning profiles and certificates"
+        run: echo "[MOCK] Would download Safari provisioning profiles and signing certificates from Azure"
+
+      - name: "[MOCK] Log out from Azure"
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Set up keychain and import certificates"
+        run: echo "[MOCK] Would create macOS keychain and import signing certificates"
+
+      - name: "[MOCK] Download SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && matrix.license_type.type != 'commercial' }}
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Download Commercial SDK Artifacts"
+        if: ${{ inputs.sdk_branch != '' && matrix.license_type.type == 'commercial' }}
+        run: echo "[MOCK] Would download commercial-sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+
+      - name: "[MOCK] Build Safari extension"
+        run: |
+          echo "[MOCK] Would run: npm run ${{ matrix.license_type.npm_command_prefix }}safari"
+          mkdir -p apps/browser/dist/${{ matrix.license_type.archive_name_prefix }}Safari
+          echo "mock safari extension" > apps/browser/dist/${{ matrix.license_type.archive_name_prefix }}Safari/safari.appex
+          cd apps/browser/dist
+          zip -r ${{ matrix.license_type.archive_name_prefix }}dist-safari.zip ${{ matrix.license_type.archive_name_prefix }}Safari
+
+      - name: Upload Safari artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
+        with:
+          name: ${{matrix.license_type.archive_name_prefix}}dist-safari-${{ env._BUILD_NUMBER }}.zip
+          path: apps/browser/dist/${{matrix.license_type.archive_name_prefix}}dist-safari.zip
+          if-no-files-found: error
+
+
+  crowdin-push:
+    name: Crowdin Push
+    if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    needs:
+      - build
+      - build-safari
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: "[MOCK] Log in to Azure"
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Retrieve Crowdin API token"
+        id: retrieve-secrets
+        run: |
+          echo "[MOCK] Would retrieve crowdin-api-token from demo-kv-ci"
+          echo "crowdin-api-token=mock-crowdin-token" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Upload Sources to Crowdin"
+        run: |
+          echo "[MOCK] Would upload localization sources to Crowdin project 268134"
+          echo "[MOCK] Config: apps/browser/crowdin.yml, branch: main"
+
+
+  check-failures:
+    name: Check for failures
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    needs:
+      - setup
+      - locales-test
+      - build-source
+      - build
+      - build-safari
+      - crowdin-push
+    steps:
+      - name: Check if any job failed
+        if: |
+          github.event_name != 'pull_request_target'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc' || github.ref == 'refs/heads/hotfix-rc-browser')
+          && contains(needs.*.result, 'failure')
+        run: exit 1
+
+      - name: "[MOCK] Log in to Azure"
+        if: failure()
+        run: echo "[MOCK] Would log in to Azure with OIDC"
+
+      - name: "[MOCK] Retrieve Slack webhook URL"
+        id: retrieve-secrets
+        if: failure()
+        run: |
+          echo "[MOCK] Would retrieve demo-alerts-slack-webhook-url from demo-kv-ci"
+          echo "demo-alerts-slack-webhook-url=mock-webhook" >> "$GITHUB_OUTPUT"
+
+      - name: "[MOCK] Log out from Azure"
+        if: failure()
+        run: echo "[MOCK] Would log out from Azure"
+
+      - name: "[MOCK] Notify Slack on failure"
+        if: failure()
+        run: echo "[MOCK] Would post failure notification to demo-alerts Slack channel"
