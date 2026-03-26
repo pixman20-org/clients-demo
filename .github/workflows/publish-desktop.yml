@@ -1,0 +1,259 @@
+# Mock workflow: echoes store/registry publishes and signing instead of actually publishing.
+# GitHub releases and deployments are real and target pixman20-org repos.
+name: Publish Desktop
+run-name: Publish Desktop ${{ inputs.publish_type }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_type:
+        description: 'Publish Options'
+        required: true
+        default: 'Initial Publish'
+        type: choice
+        options:
+          - Initial Publish
+          - Republish
+          - Dry Run
+      version:
+        description: 'Version to publish (default: latest desktop release)'
+        required: true
+        type: string
+        default: latest
+      rollout_percentage:
+        description: 'Staged Rollout Percentage'
+        required: true
+        default: '10'
+        type: string
+      snap_publish:
+        description: 'Publish to Snap store'
+        required: true
+        default: true
+        type: boolean
+      choco_publish:
+        description: 'Publish to Chocolatey store'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-24.04
+    outputs:
+      release-version: ${{ steps.version.outputs.version }}
+      release-channel: ${{ steps.release-channel.outputs.channel }}
+      tag-name: ${{ steps.version.outputs.tag_name }}
+      deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+    steps:
+      - name: Branch check
+        if: ${{ inputs.publish_type != 'Dry Run' }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/rc" ]] && [[ "$GITHUB_REF" != "refs/heads/hotfix-rc-desktop" ]]; then
+            echo "==================================="
+            echo "[!] Can only publish from the 'rc' or 'hotfix-rc-desktop' branches"
+            echo "==================================="
+            exit 1
+          fi
+
+      - name: Check Publish Version
+        id: version
+        run: |
+          if [[ "${{ inputs.version }}" == "latest" || "${{ inputs.version }}" == "" ]]; then
+            TAG_NAME=$(curl "https://api.github.com/repos/pixman20-org/clients-demo/releases" | jq -c '.[] | select(.tag_name | contains("desktop")) | .tag_name' | head -1 | cut -d '"' -f 2)
+            VERSION=$(echo $TAG_NAME | sed "s/desktop-v//")
+            echo "Latest Released Version: $VERSION"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+            echo "Tag name: $TAG_NAME"
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "Release Version: ${{ inputs.version }}"
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+
+            TAG_NAME="desktop-v${{ inputs.version }}"
+
+            echo "Tag name: $TAG_NAME"
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get Version Channel
+        id: release-channel
+        run: |
+          case "${{ steps.version.outputs.version }}" in
+            *"alpha"*)
+              echo "channel=alpha" >> $GITHUB_OUTPUT
+              echo "[!] We do not yet support 'alpha'"
+              exit 1
+              ;;
+            *"beta"*)
+              echo "channel=beta" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "channel=latest" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Create GitHub deployment
+        if: ${{ inputs.publish_type != 'Dry Run' }}
+        uses: chrnorm/deployment-action@55729fcebec3d284f60f5bcabbd8376437d696b1 # v2.0.7
+        id: deployment
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          initial-status: 'in_progress'
+          environment: 'Desktop - Production'
+          description: 'Deployment ${{ steps.version.outputs.version }} to channel ${{ steps.release-channel.outputs.channel }} from branch ${{ github.ref_name }}'
+          task: release
+
+  electron-blob:
+    name: Electron blob publish
+    runs-on: ubuntu-24.04
+    needs: setup
+    env:
+      _PKG_VERSION: ${{ needs.setup.outputs.release-version }}
+      _RELEASE_TAG: ${{ needs.setup.outputs.tag-name }}
+    steps:
+      - name: '[MOCK] Login to Azure'
+        run: echo "[MOCK] Skipping Azure login (no real credentials)"
+
+      - name: '[MOCK] Retrieve secrets'
+        id: retrieve-secrets
+        run: echo "[MOCK] Skipping secret retrieval from Azure Key Vault (aws-electron-access-id, aws-electron-access-key, aws-electron-bucket-name)"
+
+      - name: Create artifacts directory
+        run: mkdir -p apps/desktop/artifacts
+
+      - name: '[MOCK] Download artifacts'
+        run: echo "[MOCK] Skipping gh release download ${{ env._RELEASE_TAG }} -R pixman20-org/clients-demo"
+
+      - name: '[MOCK] Set staged rollout percentage'
+        env:
+          RELEASE_CHANNEL: ${{ needs.setup.outputs.release-channel }}
+          ROLLOUT_PCT: ${{ inputs.rollout_percentage }}
+        run: |
+          echo "[MOCK] Would append stagingPercentage: ${ROLLOUT_PCT} to apps/desktop/artifacts/${RELEASE_CHANNEL}.yml"
+          echo "[MOCK] Would append stagingPercentage: ${ROLLOUT_PCT} to apps/desktop/artifacts/${RELEASE_CHANNEL}-linux.yml"
+          echo "[MOCK] Would append stagingPercentage: ${ROLLOUT_PCT} to apps/desktop/artifacts/${RELEASE_CHANNEL}-mac.yml"
+
+      - name: '[MOCK] Publish artifacts to S3'
+        if: ${{ inputs.publish_type != 'Dry Run' }}
+        run: echo "[MOCK] aws s3 cp ./ <bucket>/desktop/ --acl public-read --recursive --quiet"
+
+      - name: Update deployment status to Success
+        if: ${{ inputs.publish_type != 'Dry Run' && success() }}
+        uses: chrnorm/deployment-status@9a72af4586197112e0491ea843682b5dc280d806 # v2.0.3
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          state: 'success'
+          deployment-id: ${{ needs.setup.outputs.deployment-id }}
+
+      - name: Update deployment status to Failure
+        if: ${{ inputs.publish_type != 'Dry Run' && failure() }}
+        uses: chrnorm/deployment-status@9a72af4586197112e0491ea843682b5dc280d806 # v2.0.3
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          state: 'failure'
+          deployment-id: ${{ needs.setup.outputs.deployment-id }}
+
+  snap:
+    name: Deploy Snap
+    runs-on: ubuntu-24.04
+    needs: setup
+    if: inputs.snap_publish
+    env:
+      _PKG_VERSION: ${{ needs.setup.outputs.release-version }}
+      _RELEASE_TAG: ${{ needs.setup.outputs.tag-name }}
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: '[MOCK] Login to Azure'
+        run: echo "[MOCK] Skipping Azure login (no real credentials)"
+
+      - name: '[MOCK] Retrieve secrets'
+        id: retrieve-secrets
+        run: echo "[MOCK] Skipping secret retrieval from Azure Key Vault (snapcraft-store-token)"
+
+      - name: Setup
+        run: mkdir dist
+        working-directory: apps/desktop
+
+      - name: '[MOCK] Download artifacts'
+        working-directory: apps/desktop/dist
+        run: echo "[MOCK] Skipping download of bitwarden_${{ env._PKG_VERSION }}_amd64.snap from GitHub release"
+
+      - name: '[MOCK] Deploy to Snap Store'
+        if: ${{ inputs.publish_type != 'Dry Run' }}
+        run: |
+          echo "[MOCK] snapcraft upload bitwarden_${{ env._PKG_VERSION }}_amd64.snap --release stable"
+          echo "[MOCK] snapcraft logout"
+        working-directory: apps/desktop/dist
+
+  choco:
+    name: Deploy Choco
+    runs-on: ubuntu-24.04
+    needs: setup
+    if: inputs.choco_publish
+    env:
+      _PKG_VERSION: ${{ needs.setup.outputs.release-version }}
+      _RELEASE_TAG: ${{ needs.setup.outputs.tag-name }}
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Print Environment
+        run: |
+          dotnet --version || echo "dotnet not available"
+          echo "Environment info printed"
+
+      - name: '[MOCK] Login to Azure'
+        run: echo "[MOCK] Skipping Azure login (no real credentials)"
+
+      - name: '[MOCK] Retrieve secrets'
+        id: retrieve-secrets
+        run: echo "[MOCK] Skipping secret retrieval from Azure Key Vault (cli-choco-api-key)"
+
+      - name: '[MOCK] Setup Chocolatey'
+        run: echo "[MOCK] choco apikey --key <secret> --source https://push.chocolatey.org/"
+
+      - name: Make dist dir
+        run: mkdir -p apps/desktop/dist
+
+      - name: '[MOCK] Download artifacts'
+        working-directory: apps/desktop/dist
+        run: echo "[MOCK] Skipping download of bitwarden.${{ env._PKG_VERSION }}.nupkg from GitHub release"
+
+      - name: '[MOCK] Push to Chocolatey'
+        if: ${{ inputs.publish_type != 'Dry Run' }}
+        run: echo "[MOCK] choco push --source=https://push.chocolatey.org/"
+        working-directory: apps/desktop/dist
+
+  update-deployment:
+    name: Update Deployment Status
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - electron-blob
+      - snap
+      - choco
+    if: ${{ always() && inputs.publish_type != 'Dry Run' }}
+    steps:
+      - name: Check if any job failed
+        if: contains(needs.*.result, 'failure')
+        run: exit 1
+
+      - name: Update deployment status to Success
+        if: ${{ inputs.publish_type != 'Dry Run' && success() }}
+        uses: chrnorm/deployment-status@9a72af4586197112e0491ea843682b5dc280d806 # v2.0.3
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          state: 'success'
+          deployment-id: ${{ needs.setup.outputs.deployment-id }}
+
+      - name: Update deployment status to Failure
+        if: ${{ inputs.publish_type != 'Dry Run' && failure() }}
+        uses: chrnorm/deployment-status@9a72af4586197112e0491ea843682b5dc280d806 # v2.0.3
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          state: 'failure'
+          deployment-id: ${{ needs.setup.outputs.deployment-id }}

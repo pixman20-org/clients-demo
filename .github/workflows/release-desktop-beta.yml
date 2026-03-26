@@ -1,0 +1,671 @@
+# Mock workflow: echoes store/registry publishes and signing instead of actually publishing.
+# GitHub releases and deployments are real and target pixman20-org repos.
+name: Release Desktop Beta
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_number:
+        description: "New Beta Version"
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-24.04
+    outputs:
+      release-version: ${{ steps.version.outputs.version }}
+      release-channel: ${{ steps.release-channel.outputs.channel }}
+      branch-name: ${{ steps.branch.outputs.branch-name }}
+      build_number: ${{ steps.increment-version.outputs.build_number }}
+      node_version: ${{ steps.retrieve-node-version.outputs.node_version }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Branch check
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]] && [[ "$GITHUB_REF" != "refs/heads/rc" ]] && [[ "$GITHUB_REF" != "refs/heads/hotfix-rc" ]]; then
+            echo "==================================="
+            echo "[!] Can only release from the 'main', 'rc' or 'hotfix-rc' branches"
+            echo "==================================="
+            exit 1
+          fi
+
+      - name: Bump Desktop Version - Root
+        env:
+          VERSION: ${{ github.event.inputs.version_number }}
+        run: npm version --workspace=@bitwarden/desktop ${VERSION}-beta
+
+      - name: Bump Desktop Version - App
+        env:
+          VERSION: ${{ github.event.inputs.version_number }}
+        run: npm version ${VERSION}-beta
+        working-directory: "apps/desktop/src"
+
+      - name: '[MOCK] Check Release Version'
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' apps/desktop/src/package.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "[MOCK] Release version check: $VERSION"
+
+      - name: Increment Version
+        id: increment-version
+        run: |
+          BUILD_NUMBER=$(expr 3000 + $GITHUB_RUN_NUMBER)
+          echo "Setting build number to $BUILD_NUMBER"
+          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Get Version Channel
+        id: release-channel
+        run: |
+          case "${{ steps.version.outputs.version }}" in
+            *"alpha"*)
+              echo "channel=alpha" >> $GITHUB_OUTPUT
+              echo "[!] We do not yet support 'alpha'"
+              exit 1
+              ;;
+            *"beta"*)
+              echo "channel=beta" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "channel=latest" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Setup git config
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+          git config --global url."https://".insteadOf ssh://
+
+      - name: Create desktop-beta-release branch
+        id: branch
+        env:
+          VERSION: ${{ github.event.inputs.version_number }}
+        run: |
+          find="."
+          replace="_"
+          ver=${VERSION//$find/$replace}
+          branch_name=desktop-beta-release-$ver-beta
+
+          git switch -c $branch_name
+          git add .
+          git commit -m "Bump desktop version to $VERSION-beta"
+
+          git push -u origin $branch_name
+
+          echo "branch-name=$branch_name" >> $GITHUB_OUTPUT
+
+      - name: Get Node Version
+        id: retrieve-node-version
+        run: |
+          NODE_NVMRC=$(cat .nvmrc)
+          NODE_VERSION=${NODE_NVMRC/v/''}
+          echo "node_version=$NODE_VERSION" >> $GITHUB_OUTPUT
+
+  linux:
+    name: Linux Build
+    runs-on: ubuntu-24.04
+    needs: setup
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.release-version }}
+      _NODE_VERSION: ${{ needs.setup.outputs.node_version }}
+      NODE_OPTIONS: --max_old_space_size=4096
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.setup.outputs.branch-name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+          node-version: ${{ env._NODE_VERSION }}
+
+      - name: '[MOCK] Set up environment'
+        run: |
+          echo "[MOCK] Skipping apt-get install pkg-config libxss-dev libsecret-1-dev rpm"
+
+      - name: '[MOCK] Set up Snap'
+        run: echo "[MOCK] Skipping sudo snap install snapcraft --classic"
+
+      - name: Print environment
+        run: |
+          node --version
+          npm --version
+
+      - name: Install Node dependencies
+        run: npm ci
+        working-directory: ./
+
+      - name: '[MOCK] Build application'
+        run: |
+          echo "[MOCK] Skipping npm run dist:lin (no signing infrastructure)"
+          mkdir -p dist
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-amd64.deb
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.rpm
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x64.freebsd
+          echo "mock" > dist/bitwarden_${{ env._PACKAGE_VERSION }}_amd64.snap
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.AppImage
+          echo "mock" > dist/${{ needs.setup.outputs.release-channel }}-linux.yml
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-amd64.deb
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-amd64.deb
+          if-no-files-found: error
+
+      - name: Upload .rpm artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.rpm
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.rpm
+          if-no-files-found: error
+
+      - name: Upload .freebsd artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x64.freebsd
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x64.freebsd
+          if-no-files-found: error
+
+      - name: Upload .snap artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: bitwarden_${{ env._PACKAGE_VERSION }}_amd64.snap
+          path: apps/desktop/dist/bitwarden_${{ env._PACKAGE_VERSION }}_amd64.snap
+          if-no-files-found: error
+
+      - name: Upload .AppImage artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.AppImage
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Upload auto-update artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: ${{ needs.setup.outputs.release-channel }}-linux.yml
+          path: apps/desktop/dist/${{ needs.setup.outputs.release-channel }}-linux.yml
+          if-no-files-found: error
+
+  windows:
+    name: Windows Build
+    runs-on: ubuntu-24.04
+    needs: setup
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/desktop
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.release-version }}
+      _NODE_VERSION: ${{ needs.setup.outputs.node_version }}
+      NODE_OPTIONS: --max_old_space_size=4096
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.setup.outputs.branch-name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+          node-version: ${{ env._NODE_VERSION }}
+
+      - name: '[MOCK] Install AST'
+        run: echo "[MOCK] Skipping dotnet tool install AzureSignTool"
+
+      - name: '[MOCK] Set up environment'
+        run: echo "[MOCK] Skipping choco install checksum"
+
+      - name: Print environment
+        run: |
+          node --version
+          npm --version
+
+      - name: '[MOCK] Login to Azure'
+        run: echo "[MOCK] Skipping Azure login (no real credentials)"
+
+      - name: '[MOCK] Retrieve secrets'
+        id: retrieve-secrets
+        run: echo "[MOCK] Skipping secret retrieval from Azure Key Vault (code-signing-*)"
+
+      - name: Install Node dependencies
+        run: npm ci
+        working-directory: ./
+
+      - name: '[MOCK] Build & Sign (dev)'
+        run: |
+          echo "[MOCK] Skipping npm run build && npm run pack:win (no signing infrastructure)"
+          mkdir -p dist/nsis-web dist/chocolatey
+          echo "mock" > dist/Bitwarden-Portable-${{ env._PACKAGE_VERSION }}.exe
+          echo "mock" > dist/nsis-web/Bitwarden-Installer-${{ env._PACKAGE_VERSION }}.exe
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-ia32.appx
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-ia32-store.appx
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x64.appx
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x64-store.appx
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-arm64.appx
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-arm64-store.appx
+          echo "mock" > dist/nsis-web/bitwarden-${{ env._PACKAGE_VERSION }}-ia32.nsis.7z
+          echo "mock" > dist/nsis-web/bitwarden-${{ env._PACKAGE_VERSION }}-x64.nsis.7z
+          echo "mock" > dist/nsis-web/bitwarden-${{ env._PACKAGE_VERSION }}-arm64.nsis.7z
+          echo "mock" > dist/chocolatey/bitwarden.${{ env._PACKAGE_VERSION }}.nupkg
+          echo "mock" > dist/nsis-web/${{ needs.setup.outputs.release-channel }}.yml
+
+      - name: Upload portable exe artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-Portable-${{ env._PACKAGE_VERSION }}.exe
+          path: apps/desktop/dist/Bitwarden-Portable-${{ env._PACKAGE_VERSION }}.exe
+          if-no-files-found: error
+
+      - name: Upload installer exe artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-Installer-${{ env._PACKAGE_VERSION }}.exe
+          path: apps/desktop/dist/nsis-web/Bitwarden-Installer-${{ env._PACKAGE_VERSION }}.exe
+          if-no-files-found: error
+
+      - name: Upload appx ia32 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-ia32.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-ia32.appx
+          if-no-files-found: error
+
+      - name: Upload store appx ia32 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-ia32-store.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-ia32-store.appx
+          if-no-files-found: error
+
+      - name: Upload NSIS ia32 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: bitwarden-${{ env._PACKAGE_VERSION }}-ia32.nsis.7z
+          path: apps/desktop/dist/nsis-web/bitwarden-${{ env._PACKAGE_VERSION }}-ia32.nsis.7z
+          if-no-files-found: error
+
+      - name: Upload appx x64 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x64.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x64.appx
+          if-no-files-found: error
+
+      - name: Upload store appx x64 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-x64-store.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-x64-store.appx
+          if-no-files-found: error
+
+      - name: Upload NSIS x64 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: bitwarden-${{ env._PACKAGE_VERSION }}-x64.nsis.7z
+          path: apps/desktop/dist/nsis-web/bitwarden-${{ env._PACKAGE_VERSION }}-x64.nsis.7z
+          if-no-files-found: error
+
+      - name: Upload appx ARM64 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-arm64.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-arm64.appx
+          if-no-files-found: error
+
+      - name: Upload store appx ARM64 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-arm64-store.appx
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-arm64-store.appx
+          if-no-files-found: error
+
+      - name: Upload NSIS ARM64 artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: bitwarden-${{ env._PACKAGE_VERSION }}-arm64.nsis.7z
+          path: apps/desktop/dist/nsis-web/bitwarden-${{ env._PACKAGE_VERSION }}-arm64.nsis.7z
+          if-no-files-found: error
+
+      - name: Upload nupkg artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: bitwarden.${{ env._PACKAGE_VERSION }}.nupkg
+          path: apps/desktop/dist/chocolatey/bitwarden.${{ env._PACKAGE_VERSION }}.nupkg
+          if-no-files-found: error
+
+      - name: Upload auto-update artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: ${{ needs.setup.outputs.release-channel }}.yml
+          path: apps/desktop/dist/nsis-web/${{ needs.setup.outputs.release-channel }}.yml
+          if-no-files-found: error
+
+  macos-build:
+    name: MacOS Build
+    runs-on: ubuntu-24.04
+    needs: setup
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.release-version }}
+      _NODE_VERSION: ${{ needs.setup.outputs.node_version }}
+      NODE_OPTIONS: --max_old_space_size=4096
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.setup.outputs.branch-name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+          node-version: ${{ env._NODE_VERSION }}
+
+      - name: Print environment
+        run: |
+          node --version
+          npm --version
+          echo "GitHub ref: $GITHUB_REF"
+          echo "GitHub event: $GITHUB_EVENT"
+
+      - name: '[MOCK] Download Provisioning Profiles secrets'
+        run: echo "[MOCK] Skipping az storage blob download for provisioning profiles"
+
+      - name: '[MOCK] Get certificates'
+        run: echo "[MOCK] Skipping az keyvault secret show for signing certificates"
+
+      - name: '[MOCK] Set up keychain'
+        run: echo "[MOCK] Skipping macOS keychain setup (no signing infrastructure)"
+
+      - name: '[MOCK] Set up provisioning profiles'
+        run: echo "[MOCK] Skipping provisioning profile setup"
+
+      - name: Install Node dependencies
+        run: npm ci
+        working-directory: ./
+
+      - name: '[MOCK] Build application (dev)'
+        run: echo "[MOCK] Skipping npm run build (macOS build on Linux runner is mocked)"
+
+  macos-package-github:
+    name: MacOS Package GitHub Release Assets
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - macos-build
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.release-version }}
+      _NODE_VERSION: ${{ needs.setup.outputs.node_version }}
+      NODE_OPTIONS: --max_old_space_size=4096
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.setup.outputs.branch-name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+          node-version: ${{ env._NODE_VERSION }}
+
+      - name: Print environment
+        run: |
+          node --version
+          npm --version
+          echo "GitHub ref: $GITHUB_REF"
+          echo "GitHub event: $GITHUB_EVENT"
+
+      - name: '[MOCK] Login to Azure'
+        run: echo "[MOCK] Skipping Azure login (no real credentials)"
+
+      - name: '[MOCK] Download Provisioning Profiles secrets'
+        run: echo "[MOCK] Skipping az storage blob download for provisioning profiles"
+
+      - name: '[MOCK] Get certificates'
+        run: echo "[MOCK] Skipping az keyvault secret show for signing certificates"
+
+      - name: '[MOCK] Set up keychain'
+        run: echo "[MOCK] Skipping macOS keychain setup (no signing infrastructure)"
+
+      - name: '[MOCK] Set up provisioning profiles'
+        run: echo "[MOCK] Skipping provisioning profile setup"
+
+      - name: Install Node dependencies
+        run: npm ci
+        working-directory: ./
+
+      - name: '[MOCK] Download artifact from hotfix-rc'
+        if: github.ref == 'refs/heads/hotfix-rc'
+        run: echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-browser.yml on branch hotfix-rc"
+
+      - name: '[MOCK] Download artifact from rc'
+        if: github.ref == 'refs/heads/rc'
+        run: echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-browser.yml on branch rc"
+
+      - name: '[MOCK] Download artifacts from main'
+        if: ${{ github.ref != 'refs/heads/rc' && github.ref != 'refs/heads/hotfix-rc' }}
+        run: echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-browser.yml on branch main"
+
+      - name: '[MOCK] Build application (dist) for GitHub release'
+        run: |
+          echo "[MOCK] Skipping npm run pack:mac (no macOS signing infrastructure)"
+          mkdir -p dist
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal-mac.zip
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg
+          echo "mock" > dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg.blockmap
+          echo "mock" > dist/${{ needs.setup.outputs.release-channel }}-mac.yml
+
+      - name: Upload .zip artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal-mac.zip
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal-mac.zip
+          if-no-files-found: error
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg
+          if-no-files-found: error
+
+      - name: Upload .dmg blockmap artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg.blockmap
+          path: apps/desktop/dist/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.dmg.blockmap
+          if-no-files-found: error
+
+      - name: Upload auto-update artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: ${{ needs.setup.outputs.release-channel }}-mac.yml
+          path: apps/desktop/dist/${{ needs.setup.outputs.release-channel }}-mac.yml
+          if-no-files-found: error
+
+  macos-package-mas:
+    name: MacOS Package Prod Release Asset
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - macos-build
+    env:
+      _PACKAGE_VERSION: ${{ needs.setup.outputs.release-version }}
+      _NODE_VERSION: ${{ needs.setup.outputs.node_version }}
+      NODE_OPTIONS: --max_old_space_size=4096
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.setup.outputs.branch-name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+          node-version: ${{ env._NODE_VERSION }}
+
+      - name: Print environment
+        run: |
+          node --version
+          npm --version
+          echo "GitHub ref: $GITHUB_REF"
+          echo "GitHub event: $GITHUB_EVENT"
+
+      - name: '[MOCK] Download Provisioning Profiles secrets'
+        run: echo "[MOCK] Skipping az storage blob download for provisioning profiles"
+
+      - name: '[MOCK] Get certificates'
+        run: echo "[MOCK] Skipping az keyvault secret show for signing certificates"
+
+      - name: '[MOCK] Set up keychain'
+        run: echo "[MOCK] Skipping macOS keychain setup (no signing infrastructure)"
+
+      - name: '[MOCK] Set up provisioning profiles'
+        run: echo "[MOCK] Skipping provisioning profile setup"
+
+      - name: Install Node dependencies
+        run: npm ci
+        working-directory: ./
+
+      - name: '[MOCK] Download artifact from hotfix-rc'
+        if: github.ref == 'refs/heads/hotfix-rc'
+        run: echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-browser.yml on branch hotfix-rc"
+
+      - name: '[MOCK] Download artifact from rc'
+        if: github.ref == 'refs/heads/rc'
+        run: echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-browser.yml on branch rc"
+
+      - name: '[MOCK] Download artifact from main'
+        if: ${{ github.ref != 'refs/heads/rc' && github.ref != 'refs/heads/hotfix-rc' }}
+        run: echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-browser.yml on branch main"
+
+      - name: '[MOCK] Build application for App Store'
+        run: |
+          echo "[MOCK] Skipping npm run pack:mac:mas (no macOS/App Store signing infrastructure)"
+          mkdir -p dist/mas-universal
+          echo "mock" > dist/mas-universal/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.pkg
+
+      - name: Upload .pkg artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: Bitwarden-${{ env._PACKAGE_VERSION }}-universal.pkg
+          path: apps/desktop/dist/mas-universal/Bitwarden-${{ env._PACKAGE_VERSION }}-universal.pkg
+          if-no-files-found: error
+
+  release:
+    name: Release beta channel to S3
+    runs-on: ubuntu-24.04
+    needs:
+      - setup
+      - linux
+      - windows
+      - macos-build
+      - macos-package-github
+      - macos-package-mas
+    steps:
+      - name: Create GitHub deployment
+        uses: chrnorm/deployment-action@55729fcebec3d284f60f5bcabbd8376437d696b1 # v2.0.7
+        id: deployment
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          initial-status: 'in_progress'
+          environment: 'Desktop - Beta'
+          description: 'Deployment ${{ needs.setup.outputs.release-version }} to channel ${{ needs.setup.outputs.release-channel }} from branch ${{ needs.setup.outputs.branch-name }}'
+          task: release
+
+      - name: '[MOCK] Login to Azure'
+        run: echo "[MOCK] Skipping Azure login (no real credentials)"
+
+      - name: '[MOCK] Retrieve secrets'
+        id: retrieve-secrets
+        run: echo "[MOCK] Skipping secret retrieval from Azure Key Vault (aws-electron-access-id, aws-electron-access-key, aws-electron-bucket-name)"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: apps/desktop/artifacts
+
+      - name: Rename .pkg to .pkg.archive
+        env:
+          PKG_VERSION: ${{ needs.setup.outputs.release-version }}
+        working-directory: apps/desktop/artifacts
+        run: mv Bitwarden-${{ env.PKG_VERSION }}-universal.pkg Bitwarden-${{ env.PKG_VERSION }}-universal.pkg.archive
+
+      - name: '[MOCK] Publish artifacts to S3'
+        run: echo "[MOCK] aws s3 cp ./ <bucket>/desktop/ --acl public-read --recursive --quiet"
+
+      - name: Update deployment status to Success
+        if: ${{ success() }}
+        uses: chrnorm/deployment-status@9a72af4586197112e0491ea843682b5dc280d806 # v2.0.3
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          state: 'success'
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+
+      - name: Update deployment status to Failure
+        if: ${{ failure() }}
+        uses: chrnorm/deployment-status@9a72af4586197112e0491ea843682b5dc280d806 # v2.0.3
+        with:
+          token: '${{ secrets.GITHUB_TOKEN }}'
+          state: 'failure'
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+
+  remove-branch:
+    name: Remove branch
+    runs-on: ubuntu-24.04
+    if: always()
+    needs:
+      - setup
+      - linux
+      - windows
+      - macos-build
+      - macos-package-github
+      - macos-package-mas
+      - release
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup git config
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+          git config --global url."https://".insteadOf ssh://
+
+      - name: Remove branch
+        env:
+          BRANCH: ${{ needs.setup.outputs.branch-name }}
+        run: git push origin --delete $BRANCH
