@@ -159,11 +159,9 @@ jobs:
         run: echo "[MOCK] Would codesign bw binary with Developer ID Application certificate"
 
       - name: Zip artifact
-        env:
-          _LOWER_RUNNER_OS: ${{ env.LOWER_RUNNER_OS }}
         run: |
           cd apps/cli/dist
-          zip -r bw${{ matrix.license_type.artifact_prefix }}-${_LOWER_RUNNER_OS}${{ matrix.os.target_suffix }}-${_PACKAGE_VERSION}.zip \
+          zip -r bw${{ matrix.license_type.artifact_prefix }}-${{ matrix.os.base }}${{ matrix.os.target_suffix }}-${_PACKAGE_VERSION}.zip \
             ${{ matrix.license_type.build_prefix }}/${{ matrix.os.base }}${{ matrix.os.target_suffix }}/bw
 
       - name: "[MOCK] Notarize app (macOS only)"
@@ -176,8 +174,8 @@ jobs:
       - name: Upload unix zip asset
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.1
         with:
-          name: bw${{ matrix.license_type.artifact_prefix }}-${{ env.LOWER_RUNNER_OS }}${{ matrix.os.target_suffix }}-${{ env._PACKAGE_VERSION }}.zip
-          path: apps/cli/dist/bw${{ matrix.license_type.artifact_prefix }}-${{ env.LOWER_RUNNER_OS }}${{ matrix.os.target_suffix }}-${{ env._PACKAGE_VERSION }}.zip
+          name: bw${{ matrix.license_type.artifact_prefix }}-${{ matrix.os.base }}${{ matrix.os.target_suffix }}-${{ env._PACKAGE_VERSION }}.zip
+          path: apps/cli/dist/bw${{ matrix.license_type.artifact_prefix }}-${{ matrix.os.base }}${{ matrix.os.target_suffix }}-${{ env._PACKAGE_VERSION }}.zip
           if-no-files-found: error
 
 
