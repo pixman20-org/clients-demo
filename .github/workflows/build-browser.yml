@@ -225,11 +225,11 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' && matrix.license_type.type != 'commercial' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Download Commercial SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' && matrix.license_type.type == 'commercial' }}
-        run: echo "[MOCK] Would download commercial-sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download commercial-sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Check source file size"
         if: ${{ startsWith(matrix.browser.name, 'firefox') }}
@@ -316,11 +316,11 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' && matrix.license_type.type != 'commercial' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Download Commercial SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' && matrix.license_type.type == 'commercial' }}
-        run: echo "[MOCK] Would download commercial-sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download commercial-sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Build Safari extension"
         run: |

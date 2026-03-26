@@ -176,7 +176,7 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Build Native Rust Module"
         run: echo "[MOCK] Would run node build.js --target=x86_64-unknown-linux-gnu --release"
@@ -262,7 +262,7 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Build Native Rust Module (ARM64)"
         run: echo "[MOCK] Would run node build.js --target=aarch64-unknown-linux-gnu --release"
@@ -336,7 +336,7 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Build Native Rust Module (Windows)"
         run: echo "[MOCK] Would run node build.js cross-platform"
@@ -476,7 +476,7 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Build Native Rust Module (Windows Beta)"
         run: echo "[MOCK] Would run node build.js cross-platform"
@@ -609,7 +609,7 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' && needs.setup.outputs.has_secrets == 'true' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Build Native Rust Module (macOS)"
         run: echo "[MOCK] Would run node build.js cross-platform"
@@ -668,7 +668,7 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Build Native Rust Module"
         run: echo "[MOCK] Would run node build.js cross-platform"
@@ -757,7 +757,7 @@ jobs:
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' }}
-        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch: ${{ inputs.sdk_branch }}"
+        run: echo "[MOCK] Would download sdk-internal from sdk-internal repo branch - ${{ inputs.sdk_branch }}"
 
       - name: "[MOCK] Build Native Rust Module"
         run: echo "[MOCK] Would run node build.js cross-platform"
