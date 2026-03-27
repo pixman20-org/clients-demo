@@ -393,31 +393,14 @@ jobs:
           echo "[MOCK] Config: apps/web/crowdin.yml, branch: main"
 
 
-  trigger-web-vault-deploy:
-    name: Trigger web vault deploy
-    if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+  cd-web:
+    name: CD Web
     needs: build-containers
-    permissions:
-      id-token: write
-    steps:
-      - name: "[MOCK] Log in to Azure"
-        run: echo "[MOCK] Would log in to Azure with OIDC"
-
-      - name: "[MOCK] Retrieve GitHub PAT"
-        id: retrieve-secret-pat
-        run: |
-          echo "[MOCK] Would retrieve demo-pat-devops-bot-repo-scope from demo-kv-ci"
-          echo "demo-pat-devops-bot-repo-scope=mock-pat" >> "$GITHUB_OUTPUT"
-
-      - name: "[MOCK] Log out from Azure"
-        run: echo "[MOCK] Would log out from Azure"
-
-      - name: "[MOCK] Trigger web vault deploy"
-        run: |
-          echo "[MOCK] Would dispatch deploy-web.yml on pixman20-org/clients-demo"
-          echo "[MOCK]   environment: USDEV"
-          echo "[MOCK]   build-web-run-id: ${{ github.run_id }}"
+    if: |
+      github.event_name != 'pull_request_target'
+      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc' || github.ref == 'refs/heads/hotfix-rc-web')
+    uses: ./.github/workflows/cd-web.yml
+    secrets: inherit
 
 
   check-failures:
@@ -428,7 +411,7 @@ jobs:
       - setup
       - build-containers
       - crowdin-push
-      - trigger-web-vault-deploy
+      - cd-web
     permissions:
       id-token: write
     steps:
