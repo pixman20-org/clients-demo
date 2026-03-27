@@ -168,11 +168,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - name: "[MOCK] Get Latest Server Version"
+      - name: Get Latest Server Version
         id: latest-server-version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[MOCK] Would fetch latest release version from pixman20-org/server-demo"
-          echo "version=mock-v1.0.0" >> "$GITHUB_OUTPUT"
+          VERSION=$(gh api repos/pixman20-org/server-demo/releases/latest --jq '.tag_name')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Latest server release version: $VERSION"
 
       - name: Set Server Ref
         id: set-server-ref
@@ -191,10 +194,13 @@ jobs:
           echo "Server ref: $SERVER_REF"
           echo "server_ref=$SERVER_REF" >> "$GITHUB_OUTPUT"
 
-      - name: "[MOCK] Check out Server repo"
-        run: |
-          echo "[MOCK] Would check out pixman20-org/server-demo at ${{ steps.set-server-ref.outputs.server_ref }}"
-          mkdir -p server
+      - name: Check out Server repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: server
+          repository: pixman20-org/server-demo
+          ref: ${{ steps.set-server-ref.outputs.server_ref }}
+          persist-credentials: false
 
       - name: "[MOCK] Download SDK Artifacts"
         if: ${{ inputs.sdk_branch != '' && matrix.license_type != 'commercial' }}
