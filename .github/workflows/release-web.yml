@@ -50,6 +50,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - setup
+    permissions:
+      contents: write
     steps:
       - name: Download latest build-web artifacts
         env:
