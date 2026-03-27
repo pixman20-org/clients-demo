@@ -52,35 +52,43 @@ jobs:
     runs-on: ubuntu-24.04
     needs: setup
     steps:
-      - name: Download all build-cli artifacts
+      - name: Download all Release artifacts
+        if: ${{ inputs.release_type != 'Dry Run' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ inputs.release_type }}" = "Dry Run" ]; then
-            BRANCH="main"
-          else
-            BRANCH="$GITHUB_REF_NAME"
-          fi
           RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow build-cli.yml \
-            --branch "$BRANCH" \
+            --branch "$GITHUB_REF_NAME" \
             --status success \
             --limit 1 \
             --json databaseId \
             --jq '.[0].databaseId')
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful build-cli run found on branch $BRANCH"
-            exit 1
-          fi
-          echo "Downloading artifacts from run $RUN_ID (branch: $BRANCH)"
+          [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ] && { echo "No successful build-cli run on $GITHUB_REF_NAME"; exit 1; }
           mkdir -p apps/cli
-          gh run download "$RUN_ID" \
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir /tmp/downloads/
+          find /tmp/downloads -type f -exec mv {} apps/cli/ \;
+          rm -rf /tmp/downloads
+
+      - name: Dry Run - Download all artifacts
+        if: ${{ inputs.release_type == 'Dry Run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
-            --dir apps/cli/
-          find apps/cli -mindepth 2 -type f -exec mv {} apps/cli/ \;
-          find apps/cli -mindepth 1 -type d -empty -delete
-          ls apps/cli/
+            --workflow build-cli.yml \
+            --branch "main" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ] && { echo "No successful build-cli run on main"; exit 1; }
+          mkdir -p apps/cli
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir /tmp/downloads/
+          find /tmp/downloads -type f -exec mv {} apps/cli/ \;
+          rm -rf /tmp/downloads
 
       - name: Generate checksums
         working-directory: ${{ github.workspace }}/apps/cli

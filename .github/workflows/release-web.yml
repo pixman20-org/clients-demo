@@ -53,36 +53,49 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download latest build-web artifacts
+      - name: Download latest build artifacts
+        if: ${{ github.event.inputs.release_type != 'Dry Run' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event.inputs.release_type }}" = "Dry Run" ]; then
-            BRANCH="main"
-          else
-            BRANCH="$GITHUB_REF_NAME"
-          fi
           RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow build-web.yml \
-            --branch "$BRANCH" \
+            --branch "$GITHUB_REF_NAME" \
             --status success \
             --limit 1 \
             --json databaseId \
             --jq '.[0].databaseId')
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful build-web run found on branch $BRANCH"
-            exit 1
-          fi
-          echo "Downloading artifacts from run $RUN_ID (branch: $BRANCH)"
+          [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ] && { echo "No successful build-web run on $GITHUB_REF_NAME"; exit 1; }
           mkdir -p apps/web/artifacts
-          gh run download "$RUN_ID" \
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern "web-*-selfhosted-COMMERCIAL.zip" \
+            --pattern "web-*-selfhosted-open-source.zip" \
+            --dir /tmp/downloads/
+          find /tmp/downloads -type f -exec mv {} apps/web/artifacts/ \;
+          rm -rf /tmp/downloads
+
+      - name: Dry Run - Download latest build artifacts
+        if: ${{ github.event.inputs.release_type == 'Dry Run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "web-*-selfhosted-*" \
-            --dir apps/web/artifacts/
-          find apps/web/artifacts -mindepth 2 -type f -exec mv {} apps/web/artifacts/ \;
-          find apps/web/artifacts -mindepth 1 -type d -empty -delete
-          ls apps/web/artifacts/
+            --workflow build-web.yml \
+            --branch "main" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ] && { echo "No successful build-web run on main"; exit 1; }
+          mkdir -p apps/web/artifacts
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern "web-*-selfhosted-COMMERCIAL.zip" \
+            --pattern "web-*-selfhosted-open-source.zip" \
+            --dir /tmp/downloads/
+          find /tmp/downloads -type f -exec mv {} apps/web/artifacts/ \;
+          rm -rf /tmp/downloads
 
       - name: Rename assets
         working-directory: apps/web/artifacts

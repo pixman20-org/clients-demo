@@ -87,39 +87,53 @@ jobs:
       - setup
       - locales-test
     steps:
-      - name: Download latest build-browser artifacts
+      - name: Download latest Release build artifacts
+        if: ${{ github.event.inputs.release_type != 'Dry Run' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event.inputs.release_type }}" = "Dry Run" ]; then
-            BRANCH="main"
-          else
-            BRANCH="$GITHUB_REF_NAME"
-          fi
           RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow build-browser.yml \
-            --branch "$BRANCH" \
+            --branch "$GITHUB_REF_NAME" \
             --status success \
             --limit 1 \
             --json databaseId \
             --jq '.[0].databaseId')
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful build-browser run found on branch $BRANCH"
-            exit 1
-          fi
-          echo "Downloading artifacts from run $RUN_ID (branch: $BRANCH)"
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
+          [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ] && { echo "No successful build-browser run on $GITHUB_REF_NAME"; exit 1; }
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --pattern "browser-source-*" \
-            --pattern "dist-chrome-MV3-*" \
-            --pattern "dist-opera-MV3-*" \
+            --pattern "dist-chrome-*" \
+            --pattern "dist-opera-*" \
             --pattern "dist-firefox-*" \
-            --pattern "dist-edge-MV3-*" \
-            --dir artifacts/
-          find artifacts -mindepth 2 -type f -exec mv {} . \;
-          find artifacts -mindepth 1 -type d -empty -delete
-          ls .
+            --pattern "dist-edge-*" \
+            --dir /tmp/downloads/
+          find /tmp/downloads -type f -exec mv {} . \;
+          rm -rf /tmp/downloads
+
+      - name: Dry Run - Download latest build artifacts
+        if: ${{ github.event.inputs.release_type == 'Dry Run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow build-browser.yml \
+            --branch "main" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ] && { echo "No successful build-browser run on main"; exit 1; }
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern "browser-source-*" \
+            --pattern "dist-chrome-*" \
+            --pattern "dist-opera-*" \
+            --pattern "dist-firefox-*" \
+            --pattern "dist-edge-*" \
+            --dir /tmp/downloads/
+          find /tmp/downloads -type f -exec mv {} . \;
+          rm -rf /tmp/downloads
 
       - name: Rename build artifacts
         env:

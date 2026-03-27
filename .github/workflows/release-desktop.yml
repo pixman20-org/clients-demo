@@ -64,35 +64,43 @@ jobs:
               ;;
           esac
 
-      - name: Download all build-desktop artifacts
+      - name: Download all artifacts
+        if: ${{ github.event.inputs.release_type != 'Dry Run' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event.inputs.release_type }}" = "Dry Run" ]; then
-            BRANCH="main"
-          else
-            BRANCH="$GITHUB_REF_NAME"
-          fi
           RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow build-desktop.yml \
-            --branch "$BRANCH" \
+            --branch "$GITHUB_REF_NAME" \
             --status success \
             --limit 1 \
             --json databaseId \
             --jq '.[0].databaseId')
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful build-desktop run found on branch $BRANCH"
-            exit 1
-          fi
-          echo "Downloading artifacts from run $RUN_ID (branch: $BRANCH)"
+          [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ] && { echo "No successful build-desktop run on $GITHUB_REF_NAME"; exit 1; }
           mkdir -p apps/desktop/artifacts
-          gh run download "$RUN_ID" \
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir /tmp/downloads/
+          find /tmp/downloads -type f -exec mv {} apps/desktop/artifacts/ \;
+          rm -rf /tmp/downloads
+
+      - name: Dry Run - Download all artifacts
+        if: ${{ github.event.inputs.release_type == 'Dry Run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
-            --dir apps/desktop/artifacts/
-          find apps/desktop/artifacts -mindepth 2 -type f -exec mv {} apps/desktop/artifacts/ \;
-          find apps/desktop/artifacts -mindepth 1 -type d -empty -delete
-          ls apps/desktop/artifacts/
+            --workflow build-desktop.yml \
+            --branch "main" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ] && { echo "No successful build-desktop run on main"; exit 1; }
+          mkdir -p apps/desktop/artifacts
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir /tmp/downloads/
+          find /tmp/downloads -type f -exec mv {} apps/desktop/artifacts/ \;
+          rm -rf /tmp/downloads
 
       - name: Create stubs for artifacts not produced by build-desktop
         env:
