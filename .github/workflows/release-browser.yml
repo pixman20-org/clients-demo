@@ -149,12 +149,11 @@ jobs:
         if: ${{ github.event.inputs.release_type != 'Dry Run' }}
         uses: ncipollo/release-action@2c591bcc8ecdcd2db72b97d6147f871fcd833ba5 # v1.14.0
         with:
-          artifacts: |
-            browser-source-${{ needs.setup.outputs.release-version }}.zip,
+          artifacts: "browser-source-${{ needs.setup.outputs.release-version }}.zip,
             dist-chrome-${{ needs.setup.outputs.release-version }}.zip,
             dist-opera-${{ needs.setup.outputs.release-version }}.zip,
             dist-firefox-${{ needs.setup.outputs.release-version }}.zip,
-            dist-edge-${{ needs.setup.outputs.release-version }}.zip
+            dist-edge-${{ needs.setup.outputs.release-version }}.zip"
           commit: ${{ github.sha }}
           tag: "browser-v${{ needs.setup.outputs.release-version }}"
           name: "Browser v${{ needs.setup.outputs.release-version }}"

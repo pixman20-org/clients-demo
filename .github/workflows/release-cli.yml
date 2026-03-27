@@ -113,8 +113,7 @@ jobs:
         env:
           PKG_VERSION: ${{ needs.setup.outputs.release-version }}
         with:
-          artifacts: |
-            apps/cli/bw-oss-windows-${{ env.PKG_VERSION }}.zip,
+          artifacts: "apps/cli/bw-oss-windows-${{ env.PKG_VERSION }}.zip,
             apps/cli/bw-oss-windows-sha256-${{ env.PKG_VERSION }}.txt,
             apps/cli/bw-windows-${{ env.PKG_VERSION }}.zip,
             apps/cli/bw-windows-sha256-${{ env.PKG_VERSION }}.txt,
@@ -129,7 +128,7 @@ jobs:
             apps/cli/bitwarden-cli.${{ env.PKG_VERSION }}.nupkg,
             apps/cli/bw_${{ env.PKG_VERSION }}_amd64.snap,
             apps/cli/bw-snap-sha256-${{ env.PKG_VERSION }}.txt,
-            apps/cli/bitwarden-cli-${{ env.PKG_VERSION }}-npm-build.zip
+            apps/cli/bitwarden-cli-${{ env.PKG_VERSION }}-npm-build.zip"
           commit: ${{ github.sha }}
           tag: cli-v${{ env.PKG_VERSION }}
           name: CLI v${{ env.PKG_VERSION }}

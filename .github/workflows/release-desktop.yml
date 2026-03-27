@@ -136,8 +136,7 @@ jobs:
           PKG_VERSION: ${{ steps.version.outputs.version }}
           RELEASE_CHANNEL: ${{ steps.release-channel.outputs.channel }}
         with:
-          artifacts: |
-            apps/desktop/artifacts/Bitwarden-${{ env.PKG_VERSION }}-amd64.deb,
+          artifacts: "apps/desktop/artifacts/Bitwarden-${{ env.PKG_VERSION }}-amd64.deb,
             apps/desktop/artifacts/Bitwarden-${{ env.PKG_VERSION }}-x86_64.rpm,
             apps/desktop/artifacts/Bitwarden-${{ env.PKG_VERSION }}-x64.freebsd,
             apps/desktop/artifacts/bitwarden_${{ env.PKG_VERSION }}_amd64.snap,
@@ -161,7 +160,7 @@ jobs:
             apps/desktop/artifacts/${{ env.RELEASE_CHANNEL }}.yml,
             apps/desktop/artifacts/${{ env.RELEASE_CHANNEL }}-linux.yml,
             apps/desktop/artifacts/${{ env.RELEASE_CHANNEL }}-mac.yml,
-            apps/desktop/artifacts/sha256-checksums.txt
+            apps/desktop/artifacts/sha256-checksums.txt"
           commit: ${{ github.sha }}
           tag: desktop-v${{ env.PKG_VERSION }}
           name: Desktop v${{ env.PKG_VERSION }}
