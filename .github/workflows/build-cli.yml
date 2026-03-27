@@ -92,8 +92,8 @@ jobs:
           [
             { base: "linux", distro: "ubuntu-24.04", target_suffix: "" },
             { base: "linux", distro: "ubuntu-24.04", target_suffix: "-arm64" },
-            { base: "mac", distro: "ubuntu-24.04", target_suffix: "" },
-            { base: "mac", distro: "ubuntu-24.04", target_suffix: "-arm64" }
+            { base: "macos", distro: "ubuntu-24.04", target_suffix: "" },
+            { base: "macos", distro: "ubuntu-24.04", target_suffix: "-arm64" }
           ]
         license_type:
           [

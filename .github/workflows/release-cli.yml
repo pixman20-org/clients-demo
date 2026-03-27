@@ -52,51 +52,52 @@ jobs:
     runs-on: ubuntu-24.04
     needs: setup
     steps:
-      - name: '[MOCK] Download all Release artifacts'
-        if: ${{ inputs.release_type != 'Dry Run' }}
+      - name: Download all build-cli artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-cli.yml on branch ${{ github.ref_name }}"
+          if [ "${{ inputs.release_type }}" = "Dry Run" ]; then
+            BRANCH="main"
+          else
+            BRANCH="$GITHUB_REF_NAME"
+          fi
+          RUN_ID=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow build-cli.yml \
+            --branch "$BRANCH" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful build-cli run found on branch $BRANCH"
+            exit 1
+          fi
+          echo "Downloading artifacts from run $RUN_ID (branch: $BRANCH)"
           mkdir -p apps/cli
-          PKG_VERSION="${{ needs.setup.outputs.release-version }}"
-          echo "mock" > apps/cli/bw-oss-windows-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-oss-windows-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-windows-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-windows-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-oss-macos-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-oss-macos-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-macos-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-macos-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-oss-linux-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-oss-linux-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-linux-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-linux-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bitwarden-cli.${PKG_VERSION}.nupkg
-          echo "mock" > apps/cli/bw_${PKG_VERSION}_amd64.snap
-          echo "mock" > apps/cli/bw-snap-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bitwarden-cli-${PKG_VERSION}-npm-build.zip
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir apps/cli/
+          find apps/cli -mindepth 2 -type f -exec mv {} apps/cli/ \;
+          find apps/cli -mindepth 1 -type d -empty -delete
+          ls apps/cli/
 
-      - name: '[MOCK] Dry Run - Download all artifacts'
-        if: ${{ inputs.release_type == 'Dry Run' }}
+      - name: Generate checksums
+        working-directory: ${{ github.workspace }}/apps/cli
+        env:
+          PKG_VERSION: ${{ needs.setup.outputs.release-version }}
         run: |
-          echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-cli.yml on branch main"
-          mkdir -p apps/cli
-          PKG_VERSION="${{ needs.setup.outputs.release-version }}"
-          echo "mock" > apps/cli/bw-oss-windows-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-oss-windows-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-windows-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-windows-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-oss-macos-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-oss-macos-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-macos-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-macos-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-oss-linux-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-oss-linux-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bw-linux-${PKG_VERSION}.zip
-          echo "mock" > apps/cli/bw-linux-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bitwarden-cli.${PKG_VERSION}.nupkg
-          echo "mock" > apps/cli/bw_${PKG_VERSION}_amd64.snap
-          echo "mock" > apps/cli/bw-snap-sha256-${PKG_VERSION}.txt
-          echo "mock" > apps/cli/bitwarden-cli-${PKG_VERSION}-npm-build.zip
+          for f in \
+            bw-oss-windows-${PKG_VERSION}.zip \
+            bw-windows-${PKG_VERSION}.zip \
+            bw-oss-macos-${PKG_VERSION}.zip \
+            bw-macos-${PKG_VERSION}.zip \
+            bw-oss-linux-${PKG_VERSION}.zip \
+            bw-linux-${PKG_VERSION}.zip; do
+            [ -f "$f" ] && sha256sum "$f" | awk '{print $1}' > "${f%.zip}-sha256-${PKG_VERSION}.txt"
+          done
+          [ -f "bw_${PKG_VERSION}_amd64.snap" ] && \
+            sha256sum "bw_${PKG_VERSION}_amd64.snap" | awk '{print $1}' > "bw-snap-sha256-${PKG_VERSION}.txt"
 
       - name: Create release
         if: ${{ inputs.release_type != 'Dry Run' }}

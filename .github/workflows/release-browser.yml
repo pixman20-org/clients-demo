@@ -87,37 +87,49 @@ jobs:
       - setup
       - locales-test
     steps:
-      - name: '[MOCK] Download latest Release build artifacts'
-        if: ${{ github.event.inputs.release_type != 'Dry Run' }}
+      - name: Download latest build-browser artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-browser.yml on branch ${{ github.ref_name }}"
-          mkdir -p .
-          echo "mock" > browser-source.zip
-          echo "mock" > dist-chrome-mv3.zip
-          echo "mock" > dist-opera.zip
-          echo "mock" > dist-firefox.zip
-          echo "mock" > dist-edge.zip
-
-      - name: '[MOCK] Dry Run - Download latest build artifacts'
-        if: ${{ github.event.inputs.release_type == 'Dry Run' }}
-        run: |
-          echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-browser.yml on branch main"
-          mkdir -p .
-          echo "mock" > browser-source.zip
-          echo "mock" > dist-chrome-mv3.zip
-          echo "mock" > dist-opera.zip
-          echo "mock" > dist-firefox.zip
-          echo "mock" > dist-edge.zip
+          if [ "${{ github.event.inputs.release_type }}" = "Dry Run" ]; then
+            BRANCH="main"
+          else
+            BRANCH="$GITHUB_REF_NAME"
+          fi
+          RUN_ID=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow build-browser.yml \
+            --branch "$BRANCH" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful build-browser run found on branch $BRANCH"
+            exit 1
+          fi
+          echo "Downloading artifacts from run $RUN_ID (branch: $BRANCH)"
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "browser-source-*" \
+            --pattern "dist-chrome-MV3-*" \
+            --pattern "dist-opera-MV3-*" \
+            --pattern "dist-firefox-*" \
+            --pattern "dist-edge-MV3-*" \
+            --dir artifacts/
+          find artifacts -mindepth 2 -type f -exec mv {} . \;
+          find artifacts -mindepth 1 -type d -empty -delete
+          ls .
 
       - name: Rename build artifacts
         env:
           PACKAGE_VERSION: ${{ needs.setup.outputs.release-version }}
         run: |
-          mv browser-source.zip browser-source-$PACKAGE_VERSION.zip
-          mv dist-chrome-mv3.zip dist-chrome-$PACKAGE_VERSION.zip
-          mv dist-opera.zip dist-opera-$PACKAGE_VERSION.zip
-          mv dist-firefox.zip dist-firefox-$PACKAGE_VERSION.zip
-          mv dist-edge.zip dist-edge-$PACKAGE_VERSION.zip
+          mv browser-source-*.zip browser-source-$PACKAGE_VERSION.zip
+          mv dist-chrome-MV3-*.zip dist-chrome-$PACKAGE_VERSION.zip
+          mv dist-opera-MV3-*.zip dist-opera-$PACKAGE_VERSION.zip
+          mv dist-firefox-*.zip dist-firefox-$PACKAGE_VERSION.zip
+          mv dist-edge-MV3-*.zip dist-edge-$PACKAGE_VERSION.zip
 
       - name: Create release
         if: ${{ github.event.inputs.release_type != 'Dry Run' }}

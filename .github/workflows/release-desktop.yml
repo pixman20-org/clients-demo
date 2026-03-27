@@ -64,80 +64,62 @@ jobs:
               ;;
           esac
 
-      - name: '[MOCK] Download all artifacts'
-        if: ${{ github.event.inputs.release_type != 'Dry Run' }}
+      - name: Download all build-desktop artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-desktop.yml on branch ${{ github.ref_name }}"
+          if [ "${{ github.event.inputs.release_type }}" = "Dry Run" ]; then
+            BRANCH="main"
+          else
+            BRANCH="$GITHUB_REF_NAME"
+          fi
+          RUN_ID=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow build-desktop.yml \
+            --branch "$BRANCH" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful build-desktop run found on branch $BRANCH"
+            exit 1
+          fi
+          echo "Downloading artifacts from run $RUN_ID (branch: $BRANCH)"
           mkdir -p apps/desktop/artifacts
-          PKG_VERSION="${{ steps.version.outputs.version }}"
-          RELEASE_CHANNEL="${{ steps.release-channel.outputs.channel }}"
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-amd64.deb
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x86_64.rpm
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x64.freebsd
-          echo "mock" > apps/desktop/artifacts/bitwarden_${PKG_VERSION}_amd64.snap
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x86_64.AppImage
-          echo "mock" > apps/desktop/artifacts/Bitwarden-Portable-${PKG_VERSION}.exe
-          echo "mock" > apps/desktop/artifacts/Bitwarden-Installer-${PKG_VERSION}.exe
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-ia32-store.appx
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-ia32.appx
-          echo "mock" > apps/desktop/artifacts/bitwarden-${PKG_VERSION}-ia32.nsis.7z
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x64-store.appx
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x64.appx
-          echo "mock" > apps/desktop/artifacts/bitwarden-${PKG_VERSION}-x64.nsis.7z
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-arm64-store.appx
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-arm64.appx
-          echo "mock" > apps/desktop/artifacts/bitwarden-${PKG_VERSION}-arm64.nsis.7z
-          echo "mock" > apps/desktop/artifacts/bitwarden.${PKG_VERSION}.nupkg
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-universal-mac.zip
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-universal.dmg
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-universal.dmg.blockmap
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-universal.pkg
-          echo "mock" > apps/desktop/artifacts/${RELEASE_CHANNEL}.yml
-          echo "mock" > apps/desktop/artifacts/${RELEASE_CHANNEL}-linux.yml
-          echo "mock" > apps/desktop/artifacts/${RELEASE_CHANNEL}-mac.yml
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir apps/desktop/artifacts/
+          find apps/desktop/artifacts -mindepth 2 -type f -exec mv {} apps/desktop/artifacts/ \;
+          find apps/desktop/artifacts -mindepth 1 -type d -empty -delete
+          ls apps/desktop/artifacts/
 
-      - name: '[MOCK] Dry Run - Download all artifacts'
-        if: ${{ github.event.inputs.release_type == 'Dry Run' }}
+      - name: Create stubs for artifacts not produced by build-desktop
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_CHANNEL: ${{ steps.release-channel.outputs.channel }}
+        working-directory: apps/desktop/artifacts
         run: |
-          echo "[MOCK] Skipping bitwarden/gh-actions/download-artifacts for build-desktop.yml on branch main"
-          mkdir -p apps/desktop/artifacts
-          PKG_VERSION="${{ steps.version.outputs.version }}"
-          RELEASE_CHANNEL="${{ steps.release-channel.outputs.channel }}"
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-amd64.deb
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x86_64.rpm
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x64.freebsd
-          echo "mock" > apps/desktop/artifacts/bitwarden_${PKG_VERSION}_amd64.snap
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x86_64.AppImage
-          echo "mock" > apps/desktop/artifacts/Bitwarden-Portable-${PKG_VERSION}.exe
-          echo "mock" > apps/desktop/artifacts/Bitwarden-Installer-${PKG_VERSION}.exe
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-ia32-store.appx
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-ia32.appx
-          echo "mock" > apps/desktop/artifacts/bitwarden-${PKG_VERSION}-ia32.nsis.7z
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x64-store.appx
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-x64.appx
-          echo "mock" > apps/desktop/artifacts/bitwarden-${PKG_VERSION}-x64.nsis.7z
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-arm64-store.appx
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-arm64.appx
-          echo "mock" > apps/desktop/artifacts/bitwarden-${PKG_VERSION}-arm64.nsis.7z
-          echo "mock" > apps/desktop/artifacts/bitwarden.${PKG_VERSION}.nupkg
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-universal-mac.zip
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-universal.dmg
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-universal.dmg.blockmap
-          echo "mock" > apps/desktop/artifacts/Bitwarden-${PKG_VERSION}-universal.pkg
-          echo "mock" > apps/desktop/artifacts/${RELEASE_CHANNEL}.yml
-          echo "mock" > apps/desktop/artifacts/${RELEASE_CHANNEL}-linux.yml
-          echo "mock" > apps/desktop/artifacts/${RELEASE_CHANNEL}-mac.yml
+          # freebsd and nsis.7z packages are not produced by the mock build
+          [ -f "Bitwarden-${PKG_VERSION}-x64.freebsd" ]            || echo "mock" > "Bitwarden-${PKG_VERSION}-x64.freebsd"
+          [ -f "bitwarden-${PKG_VERSION}-ia32.nsis.7z" ]           || echo "mock" > "bitwarden-${PKG_VERSION}-ia32.nsis.7z"
+          [ -f "bitwarden-${PKG_VERSION}-x64.nsis.7z" ]            || echo "mock" > "bitwarden-${PKG_VERSION}-x64.nsis.7z"
+          [ -f "bitwarden-${PKG_VERSION}-arm64.nsis.7z" ]          || echo "mock" > "bitwarden-${PKG_VERSION}-arm64.nsis.7z"
+          [ -f "Bitwarden-${PKG_VERSION}-universal.dmg.blockmap" ]  || echo "mock" > "Bitwarden-${PKG_VERSION}-universal.dmg.blockmap"
 
       - name: Rename .pkg to .pkg.archive
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         working-directory: apps/desktop/artifacts
-        run: mv Bitwarden-${{ env.PKG_VERSION }}-universal.pkg Bitwarden-${{ env.PKG_VERSION }}-universal.pkg.archive
-
-      - name: '[MOCK] Get checksum files'
         run: |
-          echo "[MOCK] Skipping bitwarden/gh-actions/get-checksum"
-          echo "mock checksum data" > apps/desktop/artifacts/sha256-checksums.txt
+          [ -f "Bitwarden-${PKG_VERSION}-universal.pkg" ] && \
+            mv "Bitwarden-${PKG_VERSION}-universal.pkg" "Bitwarden-${PKG_VERSION}-universal.pkg.archive"
+
+      - name: Generate sha256 checksums
+        working-directory: apps/desktop/artifacts
+        run: |
+          sha256sum * > sha256-checksums.txt
+          cat sha256-checksums.txt
 
       - name: Create Release
         uses: ncipollo/release-action@2c591bcc8ecdcd2db72b97d6147f871fcd833ba5 # v1.14.0
